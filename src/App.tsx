@@ -49,32 +49,21 @@ import { SupplierPortalPage } from './pages/supplier/SupplierPortalPage';
 import { AppProvider, useApp } from './context/AppContext';
 import { Role } from './types';
 import { OfflineIndicator } from './components/pwa/OfflineIndicator';
-
-// Staff/Admin roles with access to Admin Management Suites
-const AUTHORIZED_ADMIN_ROLES: Role[] = [
-  'SUPER_ADMIN',
-  'ADMIN',
-  'ORDER_MANAGER',
-  'INVENTORY_MANAGER',
-  'FINANCE',
-  'SUPPORT'
-];
+import { isAdminRole } from './lib/auth';
+import { getStaffToken } from './lib/apiClient';
 
 // Route protection wrapper for the /admin route group
 function AdminProtectedRoute({ children }: { children?: React.ReactNode }) {
   const { currentRole } = useApp();
   const location = useLocation();
+  const staffToken = getStaffToken();
 
-  const isAuthorizedAdmin = AUTHORIZED_ADMIN_ROLES.includes(currentRole);
-
-  if (!isAuthorizedAdmin) {
-    if (currentRole === 'SUPPLIER') {
-      return <Navigate to="/supplier" replace state={{ from: location.pathname }} />;
-    }
-    // Unauthorized users/customers are redirected away from admin management routes
-    return <Navigate to="/account" replace state={{ from: location.pathname, unauthorized: true }} />;
+  // If user is explicitly in supplier mode, navigate to supplier portal
+  if (currentRole === 'SUPPLIER' && !staffToken) {
+    return <Navigate to="/supplier" replace state={{ from: location.pathname }} />;
   }
 
+  // AdminLayout itself handles StaffLoginScreen gate and per-module RBAC checks
   return children ? <>{children}</> : <Outlet />;
 }
 

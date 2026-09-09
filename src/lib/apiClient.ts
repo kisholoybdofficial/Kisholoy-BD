@@ -35,7 +35,7 @@ const safeSet = (key: string, value: string | null) => {
 };
 
 export const DEFAULT_ROOT_STAFF_TOKEN = 'ksh-token-super-admin-root-session-2026';
-export const getStaffToken = () => safeGet(STAFF_TOKEN_KEY) || DEFAULT_ROOT_STAFF_TOKEN;
+export const getStaffToken = () => safeGet(STAFF_TOKEN_KEY);
 export const setStaffToken = (token: string | null) => safeSet(STAFF_TOKEN_KEY, token);
 export const getCustomerToken = () => safeGet(CUSTOMER_TOKEN_KEY);
 export const setCustomerToken = (token: string | null) => safeSet(CUSTOMER_TOKEN_KEY, token);

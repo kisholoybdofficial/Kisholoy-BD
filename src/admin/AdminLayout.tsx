@@ -21,6 +21,10 @@ import { ThemeButton } from '../components/layout/ThemeButton';
 import { AdminErrorBoundary } from '../components/admin/AdminErrorBoundary';
 import { useAdminTactileFeedback } from '../hooks/useAdminTactileFeedback';
 import { AdminTactileProvider } from '../context/AdminTactileContext';
+import { StaffLoginScreen } from './StaffLoginScreen';
+import { getStaffToken, setStaffToken } from '../lib/apiClient';
+import { isAdminRole, canAccessAdminRoute, verifyIsAdminWithClaims, verifyUserRole } from '../lib/auth';
+import { auth } from '../lib/firebase';
 
 /**
  * Unified route monitoring hook that logs and validates active admin sub-menu navigation
@@ -191,12 +195,94 @@ function AdminLayoutContent() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Auto-elevate customer role to SUPER_ADMIN when navigating the administration suite
+  // Real Staff Authentication Guard
+  const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
+    return Boolean(getStaffToken());
+  });
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+
   useEffect(() => {
-    if (currentRole === 'CUSTOMER') {
-      setCurrentRole('SUPER_ADMIN');
+    let isMounted = true;
+    const token = getStaffToken();
+
+    if (!token) {
+      // Check Firebase Auth state directly for custom claims
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        verifyIsAdminWithClaims(currentUser).then((isAdmin) => {
+          if (!isMounted) return;
+          if (isAdmin) {
+            verifyUserRole(currentUser).then((role) => {
+              if (!isMounted) return;
+              setIsStaffAuthenticated(true);
+              setCurrentRole(role);
+              setAuthChecking(false);
+            });
+            return;
+          }
+          setIsStaffAuthenticated(false);
+          setAuthChecking(false);
+        });
+        return;
+      }
+      setIsStaffAuthenticated(false);
+      setAuthChecking(false);
+      return;
     }
-  }, [currentRole, setCurrentRole]);
+
+    fetch('/api/security/auth/verify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ token })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!isMounted) return;
+        if (data.valid && data.role && isAdminRole(data.role)) {
+          setIsStaffAuthenticated(true);
+          setCurrentRole(data.role);
+        } else {
+          setStaffToken(null);
+          setIsStaffAuthenticated(false);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setIsStaffAuthenticated(Boolean(getStaffToken()) && isAdminRole(currentRole));
+      })
+      .finally(() => {
+        if (isMounted) setAuthChecking(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [setCurrentRole, currentRole]);
+
+  const handleAdminLogout = async () => {
+    const token = getStaffToken();
+    try {
+      if (token) {
+        await fetch('/api/security/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ token })
+        });
+      }
+    } catch {
+      // ignore network errors
+    }
+    setStaffToken(null);
+    setIsStaffAuthenticated(false);
+    setCurrentRole('CUSTOMER');
+    showToast(isBn ? 'সফলভাবে অ্যাডমিন লগআউট সম্পন্ন হয়েছে।' : 'Admin session logged out successfully.');
+  };
 
   // Sidebar accordion: default all sections expanded for full visibility of all submenus
   const ALL_SECTION_IDS = ['sales-operations', 'catalog-inventory', 'customer-management', 'system-administration'];
@@ -269,21 +355,45 @@ function AdminLayoutContent() {
     setGuideModalOpen(true);
   };
 
-  // Check route access permission: Super Admin & Admin have unrestricted access
+  // Check route access permission using isAdminRole and canAccessAdminRoute
   const currentRouteRule = ROUTE_PERMISSIONS[location.pathname];
   const isAllowedOnCurrentRoute =
-    currentRole === 'SUPER_ADMIN' ||
-    currentRole === 'ADMIN' ||
-    !currentRouteRule ||
-    currentRouteRule.allowedRoles.includes(currentRole);
+    isAdminRole(currentRole) &&
+    (currentRole === 'SUPER_ADMIN' || canAccessAdminRoute(currentRole, location.pathname) || (
+      !currentRouteRule || currentRouteRule.allowedRoles.includes(currentRole)
+    ));
 
   // Check if role is allowed to view a specific item
   const isItemAllowed = (itemPath: string) => {
-    if (currentRole === 'SUPER_ADMIN' || currentRole === 'ADMIN') return true;
-    const rule = ROUTE_PERMISSIONS[itemPath];
-    if (!rule) return true;
-    return rule.allowedRoles.includes(currentRole);
+    if (!isAdminRole(currentRole)) return false;
+    if (currentRole === 'SUPER_ADMIN') return true;
+    return canAccessAdminRoute(currentRole, itemPath);
   };
+
+  if (authChecking) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-stone-100 dark:bg-slate-950 text-stone-900 dark:text-slate-100">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-700 to-teal-950 flex items-center justify-center font-serif font-black text-white text-xl shadow-md mb-4 animate-pulse">
+          K
+        </div>
+        <p className="text-xs font-mono text-stone-500 dark:text-slate-400">
+          {isBn ? 'সিকিউরিটি সেশন যাচাই করা হচ্ছে…' : 'Verifying staff credentials…'}
+        </p>
+      </div>
+    );
+  }
+
+  if (!isStaffAuthenticated) {
+    return (
+      <StaffLoginScreen
+        onAuthenticated={({ role }) => {
+          setIsStaffAuthenticated(true);
+          setCurrentRole(role);
+          showToast(isBn ? 'স্বাগতম! অ্যাডমিন প্যানেল আনলক করা হয়েছে।' : 'Welcome! Admin panel unlocked.');
+        }}
+      />
+    );
+  }
 
   return (
     <div id="admin-root-layout" className="h-screen overflow-hidden flex flex-col bg-stone-100/90 dark:bg-slate-950 text-stone-900 dark:text-slate-100 font-sans selection:bg-teal-900 selection:text-white transition-colors duration-200 w-full max-w-full min-w-0">
@@ -392,6 +502,17 @@ function AdminLayoutContent() {
             <span>{isBn ? 'লাইভ ওয়েবসাইট' : 'Live Store'}</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </Link>
+
+          {/* Admin Sign Out Button */}
+          <button
+            id="admin-logout-btn"
+            onClick={handleAdminLogout}
+            className="inline-flex min-h-[44px] items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/50 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title={isBn ? 'অ্যাডমিন থেকে লগআউট করুন' : 'Sign out of Admin'}
+          >
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden md:inline">{isBn ? 'লগআউট' : 'Sign Out'}</span>
+          </button>
         </div>
       </header>
 

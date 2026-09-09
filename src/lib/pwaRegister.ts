@@ -1,6 +1,11 @@
 import { registerSW } from 'virtual:pwa-register';
 
 export function initPwaServiceWorker(): void {
+  // Never register service worker in development mode to prevent dev-sw.js MIME/WebSocket errors
+  if (import.meta.env.DEV) {
+    return;
+  }
+
   if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     try {
       const updateSW = registerSW({

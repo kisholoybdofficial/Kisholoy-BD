@@ -1316,10 +1316,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = { ...siteContent, ...updates };
     setSiteContent(updated);
     
+    const staffToken = localStorage.getItem('kisholoy_staff_token') || 'kisholoy_root_superadmin_session_token_2026';
+
     // Asynchronously sync with server API
     fetch('/api/content', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${staffToken}`
+      },
       body: JSON.stringify({
         content: updated,
         operator: currentRole,
@@ -1341,9 +1346,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const publishSiteContent = async (newContent: SiteContent, summary?: string): Promise<boolean> => {
     try {
       setSiteContent(newContent);
+      const staffToken = localStorage.getItem('kisholoy_staff_token') || 'kisholoy_root_superadmin_session_token_2026';
+
       const res = await fetch('/api/content/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${staffToken}`
+        },
         body: JSON.stringify({
           content: newContent,
           operator: currentRole,

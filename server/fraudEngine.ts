@@ -23,10 +23,9 @@ const REMOTE_RISK_DISTRICTS = new Set([
   'Bhola', 'Bandarban', 'Khagrachhari', 'Rangamati', 'Sunamganj', 'Patuakhali', 'Barguna'
 ]);
 
-// Suspicious dummy keywords in Bangladeshi delivery addresses
+// Suspicious dummy keywords in Bangladeshi delivery addresses (checked as whole words)
 const DUMMY_ADDRESS_KEYWORDS = [
-  'test', 'dummy', 'fake', 'asdf', 'unknown', 'xyz', 'demo', 'checking',
-  'testing', 'null', 'na', '1234', 'road 00', 'house 00'
+  'test', 'dummy', 'fake', 'asdf', 'unknown', 'xyz', 'testing'
 ];
 
 export class FraudEngine {
@@ -139,30 +138,31 @@ export class FraudEngine {
       reasons.push('Phone number does not match standard Bangladesh mobile operator format (+8801[3-9]XXXXXXXX).');
     }
 
-    // Check for obvious repeating digits (e.g. 01711111111 or 01800000000)
+    // Check for obvious repeating identical digits (e.g. 01700000000 or 01811111111)
     const digitsOnly = normalizedPhone.replace(/\D/g, '');
     const last8Digits = digitsOnly.slice(-8);
-    if (/^(\d)\1{7}$/.test(last8Digits) || last8Digits === '12345678') {
-      phoneScore += 45;
+    if (/^(\d)\1{7}$/.test(last8Digits)) {
+      phoneScore += 30;
       flags.push('SUSPICIOUS_PHONE_PATTERN');
-      reasons.push('Phone number has unnatural repeating or sequential digits pattern.');
+      reasons.push('Phone number has 8 identical repeating digits.');
     }
 
     // -------------------------------------------------------------
     // 3. Address Heuristics
     // -------------------------------------------------------------
     const shortAddrRule = rules.find(r => r.code === 'SHORT_VAGUE_ADDRESS');
-    const thresholdLen = shortAddrRule?.thresholdValue || 12;
+    const thresholdLen = shortAddrRule?.thresholdValue || 8;
     if (normalizedAddress.length < thresholdLen) {
-      addressScore += (shortAddrRule?.weight || 30);
+      addressScore += (shortAddrRule?.weight || 20);
       flags.push('SHORT_VAGUE_ADDRESS');
-      reasons.push(`Delivery address is too short (${normalizedAddress.length} chars), missing street or holding details.`);
+      reasons.push(`Delivery address is very brief (${normalizedAddress.length} chars).`);
     }
 
-    // Check dummy keywords
+    // Check dummy keywords using word boundary regex
     for (const kw of DUMMY_ADDRESS_KEYWORDS) {
-      if (normalizedAddress.includes(kw)) {
-        addressScore += 35;
+      const wordRegex = new RegExp(`\\b${kw}\\b`, 'i');
+      if (wordRegex.test(normalizedAddress)) {
+        addressScore += 25;
         flags.push('DUMMY_ADDRESS_KEYWORD');
         reasons.push(`Suspicious dummy address keyword detected: "${kw}".`);
         break;
@@ -262,10 +262,10 @@ export class FraudEngine {
     let riskRating: 'LOW' | 'MEDIUM' | 'HIGH' | 'SUSPICIOUS' = 'LOW';
     let recommendation: 'AUTO_APPROVE' | 'REQUIRE_PHONE_VERIFICATION' | 'REQUIRE_ADVANCE_SHIPPING_FEE' | 'BLOCK' = 'AUTO_APPROVE';
 
-    if (finalScore >= settings.autoBlockThreshold || flags.includes('PHONE_BLACKLISTED') || flags.includes('IP_BLACKLISTED')) {
+    if (flags.includes('PHONE_BLACKLISTED') || flags.includes('IP_BLACKLISTED') || finalScore >= 95) {
       riskRating = 'SUSPICIOUS';
       recommendation = 'BLOCK';
-    } else if (finalScore >= 60 || flags.includes('EXTREME_VALUE_COD') || flags.includes('PREVIOUS_FAILED_DELIVERY')) {
+    } else if (finalScore >= 65 || flags.includes('EXTREME_VALUE_COD') || flags.includes('PREVIOUS_FAILED_DELIVERY')) {
       riskRating = 'HIGH';
       recommendation = 'REQUIRE_ADVANCE_SHIPPING_FEE';
     } else if (finalScore >= settings.phoneVerificationThreshold) {
