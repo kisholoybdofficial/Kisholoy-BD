@@ -50,7 +50,8 @@ export function AdminModalShell({
     <div
       ref={containerRef}
       {...dialogProps}
-      className={overlayClassName}
+      data-admin-modal="true"
+      className={`admin-modal ${overlayClassName}`.trim()}
       onMouseDown={(e) => {
         // mousedown, not click: a drag that ends on the backdrop should not
         // dismiss a form the user was selecting text in.

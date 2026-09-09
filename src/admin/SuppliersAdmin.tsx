@@ -35,7 +35,7 @@ import { AdminModalShell } from '../components/admin/AdminModalShell';
 import { usePendingAction } from '../hooks/usePendingAction';
 
 export function SuppliersAdmin() {
-  const { currentRole, language, showToast, products } = useApp();
+  const { currentRole, language, showToast, products, refreshProducts } = useApp();
   const [activeTab, setActiveTab] = useState<'suppliers' | 'agreements' | 'batches' | 'pos' | 'payments' | 'settlements' | 'portal'>('suppliers');
   // F-306: blocks duplicate submits while a mutation is in flight.
   const { run, isPending, isBusy } = usePendingAction();
@@ -291,6 +291,7 @@ export function SuppliersAdmin() {
       const data = await res.json();
       if (data.success) {
         notify('Purchase order received! Live stock levels incremented automatically.');
+        await refreshProducts();
         loadSupplierData();
         if (selectedSupplier) openSupplierDetail(selectedSupplier);
       } else {
@@ -406,49 +407,49 @@ export function SuppliersAdmin() {
   });
 
   return (
-    <div id="suppliers-admin-container" className="space-y-6 max-w-7xl mx-auto">
+    <div id="suppliers-admin-container" className="space-y-4 sm:space-y-6 max-w-7xl mx-auto pb-12 w-full min-w-0 overflow-x-hidden">
       {/* Top Banner & Header */}
-      <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-5">
+      <div className="bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 p-4 sm:p-6 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-5">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-wide bg-teal-50 text-teal-900 border border-teal-200">
               {language === 'BN' ? 'ক্যাটালগ ও ইনভেন্টরি' : 'CATALOG & INVENTORY'}
             </span>
             <span className="text-xs text-stone-400 font-mono">/</span>
-            <span className="text-xs font-semibold text-stone-600 font-mono">SUPPLIERS & PROCUREMENT</span>
+            <span className="text-xs font-semibold text-stone-600 dark:text-stone-400 font-mono">SUPPLIERS & PROCUREMENT</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-teal-900 text-white rounded-xl shadow-xs">
-              <Building2 className="w-6 h-6" />
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 bg-teal-900 text-white rounded-xl shadow-xs shrink-0">
+              <Building2 className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-serif font-bold text-stone-900">
-                  {language === 'BN' ? 'সরবরাহকারী ও সংগ্রহ ব্যবস্থাপনা' : 'Suppliers & Procurement Ledger'}
+                <h1 className="text-xl sm:text-2xl font-serif font-bold text-stone-900 dark:text-white">
+                  {language === 'BN' ? 'সরবরাহকারী ও সংগ্রহ ব্যবস্থাপনা' : 'Suppliers & Procurement'}
                 </h1>
                 <button
                   onClick={() => setActiveHelp(SUPPLIER_HELP_DEFINITIONS.supplier_ledger)}
-                  className="text-stone-400 hover:text-teal-700 p-1 rounded-full hover:bg-stone-100 transition-colors"
+                  className="text-stone-400 hover:text-teal-700 p-1 rounded-full hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors shrink-0"
                   title="Explain Supplier Ledger"
                 >
                   <HelpCircle className="w-4 h-4" />
                 </button>
               </div>
-              <p className="text-xs text-stone-500 mt-0.5 max-w-2xl">
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5 max-w-2xl">
                 {language === 'BN' 
-                  ? 'নিরাপদ ক্রয়াদেশ (পিও), গুদাম ইনভেন্টরি অটোমেশন, অর্থ পরিশোধ ভাউচার এবং ফিচার-ফ্ল্যাগযুক্ত সেলফ-সার্ভিস পোর্টাল নিয়ন্ত্রণ কেন্দ্র।'
-                  : 'Server-authoritative procurement ledger, purchase order stock inflow, payment disbursements, and isolated vendor self-service.'}
+                  ? 'নিরাপদ ক্রয়াদেশ (পিও), গুদাম ইনভেন্টরি অটোমেশন, অর্থ পরিশোধ ভাউচার এবং পোর্টাল নিয়ন্ত্রণ।'
+                  : 'Server-authoritative procurement ledger, purchase order stock inflow, and isolated vendor self-service.'}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <button
             onClick={loadSupplierData}
             disabled={loading}
-            className="px-3.5 py-2 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-xl flex items-center gap-1.5 transition-colors"
+            className="flex-1 sm:flex-initial px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-300 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span>{language === 'BN' ? 'রিফ্রেশ' : 'Refresh'}</span>
@@ -456,32 +457,32 @@ export function SuppliersAdmin() {
 
           <button
             onClick={() => setCreatePoOpen(true)}
-            className="px-3.5 py-2 text-xs font-bold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl flex items-center gap-1.5 transition-colors"
+            className="flex-1 sm:flex-initial px-3 py-2 text-xs font-bold text-teal-900 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900/60 border border-teal-200 dark:border-teal-800/80 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
           >
             <Truck className="w-3.5 h-3.5" />
-            <span>{language === 'BN' ? 'নতুন ক্রয়াদেশ' : 'Issue PO'}</span>
+            <span>{language === 'BN' ? 'ক্রয়াদেশ' : 'Issue PO'}</span>
           </button>
 
           <button
             onClick={() => setRecordPaymentOpen(true)}
-            className="px-3.5 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center gap-1.5 transition-colors"
+            className="flex-1 sm:flex-initial px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800/80 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
           >
             <DollarSign className="w-3.5 h-3.5" />
-            <span>{language === 'BN' ? 'পেমেন্ট প্রদান' : 'Pay Supplier'}</span>
+            <span>{language === 'BN' ? 'পেমেন্ট' : 'Pay Vendor'}</span>
           </button>
 
           <button
             onClick={() => setBulkImportOpen(true)}
-            className="px-3.5 py-2 text-xs font-bold text-stone-800 bg-white hover:bg-stone-100 border border-stone-300 rounded-xl flex items-center gap-1.5 transition-colors shadow-2xs"
+            className="flex-1 sm:flex-initial px-3 py-2 text-xs font-bold text-stone-800 dark:text-stone-200 bg-white dark:bg-stone-850 hover:bg-stone-100 dark:hover:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-xl flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
             title={language === 'BN' ? 'CSV বা JSON থেকে বাল্ক সরবরাহকারী আমদানি করুন' : 'Bulk import suppliers via CSV or JSON'}
           >
-            <UploadCloud className="w-3.5 h-3.5 text-teal-800" />
-            <span>{language === 'BN' ? 'বাল্ক ইম্পোর্ট' : 'Bulk Import'}</span>
+            <UploadCloud className="w-3.5 h-3.5 text-teal-800 dark:text-teal-400" />
+            <span>{language === 'BN' ? 'বাল্ক' : 'Import'}</span>
           </button>
 
           <button
             onClick={() => setCreateSupplierOpen(true)}
-            className="px-4 py-2 text-xs font-bold text-white bg-teal-900 hover:bg-teal-950 rounded-xl flex items-center gap-1.5 shadow-xs transition-colors"
+            className="w-full sm:w-auto px-4 py-2 text-xs font-bold text-white bg-teal-900 hover:bg-teal-950 rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{language === 'BN' ? 'সরবরাহকারী যোগ' : 'Add Supplier'}</span>
@@ -491,65 +492,65 @@ export function SuppliersAdmin() {
 
       {/* Financial Health Summary Cards */}
       {metrics && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
             <div className="flex items-center justify-between text-xs text-stone-500 font-medium">
               <span>{language === 'BN' ? 'মোট সরবরাহকারী' : 'Active Suppliers'}</span>
               <Building2 className="w-4 h-4 text-teal-600" />
             </div>
-            <div className="text-2xl font-bold text-stone-900 mt-2 font-mono">
+            <div className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-white mt-1.5 font-mono">
               {metrics.activeSuppliers}
-              <span className="text-xs font-sans text-stone-400 font-normal ml-2">/ {metrics.totalSuppliers} total</span>
+              <span className="text-[11px] font-sans text-stone-400 font-normal ml-1 sm:ml-2">/ {metrics.totalSuppliers}</span>
             </div>
-            <div className="text-[11px] text-stone-500 mt-1 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <div className="text-[10px] sm:text-[11px] text-stone-500 mt-1 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
               <span>100% verified vendors</span>
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
             <div className="flex items-center justify-between text-xs text-stone-500 font-medium">
-              <span>{language === 'BN' ? 'মোট ক্রয় পরিমাণ' : 'Total Purchased'}</span>
+              <span>{language === 'BN' ? 'মোট ক্রয়' : 'Total Purchased'}</span>
               <ArrowUpRight className="w-4 h-4 text-stone-600" />
             </div>
-            <div className="text-2xl font-bold text-stone-900 mt-2 font-mono">
+            <div className="text-lg sm:text-2xl font-bold text-stone-900 dark:text-white mt-1.5 font-mono truncate">
               {formatPrice(metrics.totalSourcedBdt ?? (metrics as any).totalPurchased ?? 0)}
             </div>
-            <div className="text-[11px] text-stone-500 mt-1">
-              Across issued procurement orders
+            <div className="text-[10px] sm:text-[11px] text-stone-500 mt-1 truncate">
+              Issued procurement
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
             <div className="flex items-center justify-between text-xs text-stone-500 font-medium">
-              <span>{language === 'BN' ? 'মোট পরিশোধিত অর্থ' : 'Total Paid to Date'}</span>
+              <span>{language === 'BN' ? 'মোট পরিশোধ' : 'Total Paid'}</span>
               <ArrowDownRight className="w-4 h-4 text-emerald-600" />
             </div>
-            <div className="text-2xl font-bold text-emerald-700 mt-2 font-mono">
+            <div className="text-lg sm:text-2xl font-bold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono truncate">
               {formatPrice(metrics.totalPaidBdt ?? (metrics as any).totalPaid ?? 0)}
             </div>
-            <div className="text-[11px] text-emerald-600 mt-1 font-medium">
-              Reconciled bank & bKash payouts
+            <div className="text-[10px] sm:text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium truncate">
+              Reconciled payouts
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
             <div className="flex items-center justify-between text-xs text-stone-500 font-medium">
-              <span>{language === 'BN' ? 'মোট বকেয়া ব্যালেন্স' : 'Total Outstanding Due'}</span>
+              <span>{language === 'BN' ? 'মোট বকেয়া' : 'Total Due'}</span>
               <AlertTriangle className="w-4 h-4 text-amber-600" />
             </div>
-            <div className="text-2xl font-bold text-amber-700 mt-2 font-mono">
+            <div className="text-lg sm:text-2xl font-bold text-amber-700 dark:text-amber-400 mt-1.5 font-mono truncate">
               {formatPrice(metrics.totalOutstandingDueBdt ?? (metrics as any).totalDue ?? 0)}
             </div>
-            <div className="text-[11px] text-amber-600 mt-1 font-medium">
-              Accounts payable obligation
+            <div className="text-[10px] sm:text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-medium truncate">
+              Accounts payable
             </div>
           </div>
         </div>
       )}
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-stone-200 bg-white rounded-t-xl px-4 pt-2 gap-2 overflow-x-auto">
+      <div className="flex border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 rounded-t-xl px-2 sm:px-4 pt-2 gap-1 sm:gap-2 overflow-x-auto scrollbar-none w-full min-w-0">
         <button
           type="button"
           onClick={() => setActiveTab('suppliers')}

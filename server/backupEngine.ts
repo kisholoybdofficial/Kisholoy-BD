@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import { serverDb } from './db';
 import { securityEngine } from './securityEngine';
+import { mongoService } from './mongoService';
 import { 
   BackupSnapshotManifest, 
   BackupScheduleConfig, 
@@ -52,7 +53,7 @@ class BackupEngine {
 
   private driveConfig: GoogleDriveConfig = {
     connected: true,
-    userEmail: 'mdmuntasirshihab@gmail.com',
+    userEmail: process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com',
     folderName: 'KISHOLOY-Backups',
     folderId: 'gdrive-folder-kisholoy-root-01',
     folderUrl: 'https://drive.google.com/drive/folders/KISHOLOY-Backups',
@@ -306,6 +307,7 @@ class BackupEngine {
     };
 
     this.snapshots.set(snapshotId, { manifest, payload });
+    mongoService.saveBackupSnapshot(manifest, payload).catch(() => {});
 
     // Log to SHA-256 chained audit ledger
     securityEngine.logAudit({
@@ -969,7 +971,7 @@ class BackupEngine {
   }
 
   public connectDrive(params?: { userEmail?: string; folderName?: string }, operator?: string): { success: boolean; config: GoogleDriveConfig } {
-    const email = params?.userEmail || 'mdmuntasirshihab@gmail.com';
+    const email = params?.userEmail || process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com';
     const folder = params?.folderName || 'KISHOLOY-Backups';
 
     this.driveConfig.connected = true;

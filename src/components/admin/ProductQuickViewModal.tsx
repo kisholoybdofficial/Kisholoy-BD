@@ -55,24 +55,24 @@ export function ProductQuickViewModal({
 
   return (
     <div ref={containerRef} {...dialogProps} className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto border border-stone-100">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto border border-stone-100 dark:border-slate-700">
         
         {/* Modal Top Header */}
-        <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-stone-200 bg-stone-50/80">
+        <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-stone-200 dark:border-slate-700 bg-stone-50/80 dark:bg-slate-900/80">
           <div className="flex items-center gap-2.5">
-            <span className="p-1.5 bg-teal-900 text-white rounded-lg">
+            <span className="p-1.5 bg-teal-900 dark:bg-teal-700 text-white rounded-lg">
               <Package className="w-4 h-4" />
             </span>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-serif font-bold text-stone-900">
+                <h2 className="text-base font-serif font-bold text-stone-900 dark:text-white">
                   {language === 'BN' ? 'পণ্য বিস্তারিত দৃশ্য' : 'Product Quick View'}
                 </h2>
-                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-stone-200 text-stone-700">
+                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-stone-200 dark:bg-slate-700 text-stone-700 dark:text-slate-200">
                   {product.sku}
                 </span>
               </div>
-              <p className="text-[11px] text-stone-500">
+              <p className="text-[11px] text-stone-500 dark:text-slate-400">
                 {language === 'BN' ? 'ক্যাটালগ বিশদ, আর্থিক তথ্য ও স্টক নিরীক্ষণ' : 'Catalog details, finance unit economics & stock telemetry'}
               </p>
             </div>
@@ -83,7 +83,7 @@ export function ProductQuickViewModal({
               to={`/product/${product.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 text-stone-500 hover:text-teal-900 hover:bg-white rounded-lg border border-stone-200 transition-colors shadow-2xs flex items-center gap-1.5 text-xs font-medium"
+              className="p-2 text-stone-500 dark:text-slate-400 hover:text-teal-900 dark:hover:text-teal-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-stone-200 dark:border-slate-600 transition-colors shadow-2xs flex items-center gap-1.5 text-xs font-medium"
               title={language === 'BN' ? 'লাইভ স্টোরে দেখুন' : 'View on Storefront'}
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -94,14 +94,14 @@ export function ProductQuickViewModal({
                 onClose();
                 onEdit(product);
               }}
-              className="px-3 py-2 bg-teal-900 hover:bg-teal-950 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5"
+              className="px-3 py-2 bg-teal-900 hover:bg-teal-950 dark:bg-teal-700 dark:hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5"
             >
               <Edit2 className="w-3.5 h-3.5" />
               <span>{language === 'BN' ? 'এডিট করুন' : 'Edit'}</span>
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
+              className="p-2 text-stone-400 hover:text-stone-900 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
               aria-label="Close"
             >
               <X className="w-5 h-5" />
@@ -116,7 +116,7 @@ export function ProductQuickViewModal({
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-5">
             {/* Gallery Column */}
             <div className="sm:col-span-5 space-y-2.5">
-              <div className="relative aspect-square rounded-xl overflow-hidden border border-stone-200 bg-stone-100 shadow-2xs">
+              <div className="relative aspect-square rounded-xl overflow-hidden border border-stone-200 dark:border-slate-700 bg-stone-100 dark:bg-slate-900 shadow-2xs">
                 <img
                   src={images[activeImageIdx] || images[0]}
                   alt={product.title}
@@ -141,7 +141,7 @@ export function ProductQuickViewModal({
                       key={idx}
                       onClick={() => setActiveImageIdx(idx)}
                       className={`w-12 h-12 rounded-lg border-2 overflow-hidden flex-shrink-0 transition-all ${
-                        activeImageIdx === idx ? 'border-teal-900 ring-2 ring-teal-900/20' : 'border-stone-200 opacity-60 hover:opacity-100'
+                        activeImageIdx === idx ? 'border-teal-900 dark:border-teal-400 ring-2 ring-teal-900/20' : 'border-stone-200 dark:border-slate-700 opacity-60 hover:opacity-100'
                       }`}
                     >
                       <img src={img} alt="" className="w-full h-full object-cover" />
@@ -155,40 +155,40 @@ export function ProductQuickViewModal({
             <div className="sm:col-span-7 flex flex-col justify-between space-y-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 text-stone-700 border border-stone-200">
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 dark:bg-slate-700 text-stone-700 dark:text-slate-200 border border-stone-200 dark:border-slate-600">
                     {product.category}
                   </span>
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                     isOutOfStock 
-                      ? 'bg-red-50 text-red-700 border-red-200' 
+                      ? 'bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800' 
                       : isLowStock 
-                        ? 'bg-amber-50 text-amber-700 border-amber-200' 
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800' 
+                        : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
                   }`}>
                     {isOutOfStock ? '● Out of Stock' : isLowStock ? '▲ Low Stock' : '✔ In Stock'}
                   </span>
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                     product.readyToShip 
-                      ? 'bg-teal-50 text-teal-800 border-teal-200' 
-                      : 'bg-stone-100 text-stone-500 border-stone-200'
+                      ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border-teal-200 dark:border-teal-800' 
+                      : 'bg-stone-100 dark:bg-slate-700 text-stone-500 dark:text-slate-400 border-stone-200 dark:border-slate-600'
                   }`}>
                     {product.readyToShip ? 'Ready to Ship' : 'Catalog Paused'}
                   </span>
                 </div>
 
-                <h1 className="text-xl font-serif font-bold text-stone-900 leading-tight">
+                <h1 className="text-xl font-serif font-bold text-stone-900 dark:text-white leading-tight">
                   {product.title}
                 </h1>
                 {product.titleBn && (
-                  <p className="font-bangla text-stone-600 text-sm mt-0.5 font-medium">
+                  <p className="font-bangla text-stone-600 dark:text-slate-300 text-sm mt-0.5 font-medium">
                     {product.titleBn}
                   </p>
                 )}
 
-                <div className="mt-3 text-xs text-stone-600 bg-stone-50 p-3 rounded-lg border border-stone-200/80 leading-relaxed">
+                <div className="mt-3 text-xs text-stone-600 dark:text-slate-300 bg-stone-50 dark:bg-slate-900/80 p-3 rounded-lg border border-stone-200/80 dark:border-slate-700 leading-relaxed">
                   <p className="font-medium">{product.description || 'No English description provided.'}</p>
                   {product.descriptionBn && (
-                    <p className="font-bangla text-stone-500 mt-1 border-t border-stone-200 pt-1">
+                    <p className="font-bangla text-stone-500 dark:text-slate-400 mt-1 border-t border-stone-200 dark:border-slate-700 pt-1">
                       {product.descriptionBn}
                     </p>
                   )}
@@ -196,13 +196,13 @@ export function ProductQuickViewModal({
               </div>
 
               {/* Quick Stock Controls */}
-              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 flex items-center justify-between">
+              <div className="bg-stone-50 dark:bg-slate-900/80 p-3 rounded-xl border border-stone-200 dark:border-slate-700 flex items-center justify-between">
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-stone-500 tracking-wider block">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 dark:text-slate-400 tracking-wider block">
                     {language === 'BN' ? 'বর্তমান মজুদ (স্টক)' : 'Warehouse Stock Level'}
                   </span>
-                  <span className="font-mono text-base font-bold text-stone-900">
-                    {product.stock} <span className="text-xs font-normal text-stone-500">units available</span>
+                  <span className="font-mono text-base font-bold text-stone-900 dark:text-white">
+                    {product.stock} <span className="text-xs font-normal text-stone-500 dark:text-slate-400">units available</span>
                   </span>
                 </div>
 
@@ -210,21 +210,21 @@ export function ProductQuickViewModal({
                   <button
                     onClick={() => onAdjustStock(product, -1)}
                     disabled={product.stock <= 0}
-                    className="p-2 bg-white hover:bg-stone-100 text-stone-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg border border-stone-200 shadow-2xs transition-colors"
+                    className="p-2 bg-white dark:bg-slate-800 hover:bg-stone-100 dark:hover:bg-slate-700 text-stone-700 dark:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg border border-stone-200 dark:border-slate-600 shadow-2xs transition-colors"
                     title="Decrease Stock (-1)"
                   >
                     <Minus className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => onAdjustStock(product, 1)}
-                    className="p-2 bg-white hover:bg-stone-100 text-stone-700 rounded-lg border border-stone-200 shadow-2xs transition-colors"
+                    className="p-2 bg-white dark:bg-slate-800 hover:bg-stone-100 dark:hover:bg-slate-700 text-stone-700 dark:text-slate-200 rounded-lg border border-stone-200 dark:border-slate-600 shadow-2xs transition-colors"
                     title="Increase Stock (+1)"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => onAdjustStock(product, 10)}
-                    className="px-2.5 py-1.5 bg-white hover:bg-stone-100 text-stone-700 rounded-lg border border-stone-200 shadow-2xs text-xs font-bold transition-colors"
+                    className="px-2.5 py-1.5 bg-white dark:bg-slate-800 hover:bg-stone-100 dark:hover:bg-slate-700 text-stone-700 dark:text-slate-200 rounded-lg border border-stone-200 dark:border-slate-600 shadow-2xs text-xs font-bold transition-colors"
                     title="Add 10 units"
                   >
                     +10
@@ -236,44 +236,44 @@ export function ProductQuickViewModal({
           </div>
 
           {/* Middle Section: Finance Center Deep Breakdown */}
-          <div className="border border-stone-200 rounded-xl overflow-hidden bg-white shadow-2xs">
-            <div className="px-4 py-3 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
+          <div className="border border-stone-200 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-800 shadow-2xs">
+            <div className="px-4 py-3 bg-stone-50 dark:bg-slate-900/80 border-b border-stone-200 dark:border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-emerald-700" />
-                <h3 className="font-bold text-stone-900 text-xs uppercase tracking-wider">
+                <DollarSign className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                <h3 className="font-bold text-stone-900 dark:text-white text-xs uppercase tracking-wider">
                   {language === 'BN' ? 'ফিন্যান্স সেন্টার ও ইউনিট ইকোনমিক্স' : 'Finance Center & Unit Economics'}
                 </h3>
               </div>
-              <span className="text-[10px] text-stone-500 font-medium">
+              <span className="text-[10px] text-stone-500 dark:text-slate-400 font-medium">
                 Connected to Accounts Payable & COGS Ledger
               </span>
             </div>
 
             <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-center sm:text-left">
-              <div className="p-3 bg-stone-50 rounded-lg border border-stone-100">
-                <span className="text-[10px] text-stone-500 uppercase font-bold block">Retail Price (MRP)</span>
-                <span className="font-mono text-base font-bold text-stone-900">৳ {product.price.toLocaleString()}</span>
+              <div className="p-3 bg-stone-50 dark:bg-slate-900/60 rounded-lg border border-stone-100 dark:border-slate-700/60">
+                <span className="text-[10px] text-stone-500 dark:text-slate-400 uppercase font-bold block">Retail Price (MRP)</span>
+                <span className="font-mono text-base font-bold text-stone-900 dark:text-white">৳ {product.price.toLocaleString()}</span>
                 {product.originalPrice && product.originalPrice > product.price && (
                   <span className="text-[10px] text-stone-400 line-through font-mono block">৳ {product.originalPrice.toLocaleString()}</span>
                 )}
               </div>
 
-              <div className="p-3 bg-stone-50 rounded-lg border border-stone-100">
-                <span className="text-[10px] text-stone-500 uppercase font-bold block">Weaver COGS (Cost)</span>
-                <span className="font-mono text-base font-bold text-stone-700">৳ {product.costPrice.toLocaleString()}</span>
+              <div className="p-3 bg-stone-50 dark:bg-slate-900/60 rounded-lg border border-stone-100 dark:border-slate-700/60">
+                <span className="text-[10px] text-stone-500 dark:text-slate-400 uppercase font-bold block">Weaver COGS (Cost)</span>
+                <span className="font-mono text-base font-bold text-stone-700 dark:text-slate-300">৳ {product.costPrice.toLocaleString()}</span>
                 <span className="text-[10px] text-stone-400 block">Base procurement</span>
               </div>
 
-              <div className="p-3 bg-stone-50 rounded-lg border border-stone-100">
-                <span className="text-[10px] text-stone-500 uppercase font-bold block">Tax / VAT Rate</span>
-                <span className="font-mono text-base font-bold text-stone-700">{taxRate}%</span>
+              <div className="p-3 bg-stone-50 dark:bg-slate-900/60 rounded-lg border border-stone-100 dark:border-slate-700/60">
+                <span className="text-[10px] text-stone-500 dark:text-slate-400 uppercase font-bold block">Tax / VAT Rate</span>
+                <span className="font-mono text-base font-bold text-stone-700 dark:text-slate-300">{taxRate}%</span>
                 <span className="text-[10px] text-stone-400 block">৳ {(product.price * (taxRate / 100)).toFixed(0)} deducted</span>
               </div>
 
               <div className={`p-3 rounded-lg border ${
                 Number(unitMarginPercent) < 20 
-                  ? 'bg-amber-50/70 border-amber-200 text-amber-900' 
-                  : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                  ? 'bg-amber-50/70 dark:bg-amber-950/50 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-300' 
+                  : 'bg-emerald-50/70 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300'
               }`}>
                 <span className="text-[10px] uppercase font-bold block">Post-Tax Margin</span>
                 <span className="font-mono text-base font-bold">{unitMarginPercent}%</span>
@@ -282,14 +282,14 @@ export function ProductQuickViewModal({
             </div>
 
             {/* Inventory capital value */}
-            <div className="px-4 py-3 bg-stone-50/50 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="flex items-center justify-between p-2 rounded bg-white border border-stone-200">
-                <span className="text-stone-600 font-medium">Current Total Retail Stock Valuation:</span>
-                <span className="font-mono font-bold text-stone-900">৳ {totalStockRetailVal.toLocaleString()}</span>
+            <div className="px-4 py-3 bg-stone-50/50 dark:bg-slate-900/40 border-t border-stone-100 dark:border-slate-700/60 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-800 border border-stone-200 dark:border-slate-700">
+                <span className="text-stone-600 dark:text-slate-300 font-medium">Current Total Retail Stock Valuation:</span>
+                <span className="font-mono font-bold text-stone-900 dark:text-white">৳ {totalStockRetailVal.toLocaleString()}</span>
               </div>
-              <div className="flex items-center justify-between p-2 rounded bg-white border border-stone-200">
-                <span className="text-stone-600 font-medium">Total Sunk Sourcing Capital (COGS):</span>
-                <span className="font-mono font-bold text-stone-900">৳ {totalStockCostVal.toLocaleString()}</span>
+              <div className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-800 border border-stone-200 dark:border-slate-700">
+                <span className="text-stone-600 dark:text-slate-300 font-medium">Total Sunk Sourcing Capital (COGS):</span>
+                <span className="font-mono font-bold text-stone-900 dark:text-white">৳ {totalStockCostVal.toLocaleString()}</span>
               </div>
             </div>
           </div>
@@ -297,61 +297,61 @@ export function ProductQuickViewModal({
           {/* Bottom Grid: Sourcing, Logistics & Quick Toggles */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Supplier Information Card */}
-            <div className="border border-stone-200 rounded-xl p-4 bg-white shadow-2xs space-y-2">
+            <div className="border border-stone-200 dark:border-slate-700 rounded-xl p-4 bg-white dark:bg-slate-800 shadow-2xs space-y-2">
               <div className="flex items-center gap-2 mb-1">
-                <Building2 className="w-4 h-4 text-teal-800" />
-                <h4 className="font-bold text-xs uppercase text-stone-700 tracking-wider">
+                <Building2 className="w-4 h-4 text-teal-800 dark:text-teal-400" />
+                <h4 className="font-bold text-xs uppercase text-stone-700 dark:text-slate-300 tracking-wider">
                   {language === 'BN' ? 'সরবরাহকারী / তাঁতি তথ্য' : 'Supplier & Sourcing Origin'}
                 </h4>
               </div>
 
               {supplier ? (
-                <div className="text-xs space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
+                <div className="text-xs space-y-1 bg-stone-50 dark:bg-slate-900/60 p-3 rounded-lg border border-stone-200 dark:border-slate-700">
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Partner:</span>
-                    <span className="font-bold text-stone-900">{supplier.companyName}</span>
+                    <span className="text-stone-500 dark:text-slate-400">Partner:</span>
+                    <span className="font-bold text-stone-900 dark:text-white">{supplier.companyName}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Supplier Code:</span>
-                    <span className="font-mono font-semibold text-stone-700">{supplier.code}</span>
+                    <span className="text-stone-500 dark:text-slate-400">Supplier Code:</span>
+                    <span className="font-mono font-semibold text-stone-700 dark:text-slate-300">{supplier.code}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Contact:</span>
-                    <span className="text-stone-700">{supplier.contactPerson} ({supplier.phone})</span>
+                    <span className="text-stone-500 dark:text-slate-400">Contact:</span>
+                    <span className="text-stone-700 dark:text-slate-300">{supplier.contactPerson} ({supplier.phone})</span>
                   </div>
                 </div>
               ) : (
-                <div className="p-3 bg-stone-50 rounded-lg text-xs text-stone-500 border border-stone-200 italic">
+                <div className="p-3 bg-stone-50 dark:bg-slate-900/60 rounded-lg text-xs text-stone-500 dark:text-slate-400 border border-stone-200 dark:border-slate-700 italic">
                   Internal product / No external supplier linked.
                 </div>
               )}
             </div>
 
             {/* Logistics & Attributes */}
-            <div className="border border-stone-200 rounded-xl p-4 bg-white shadow-2xs space-y-2">
+            <div className="border border-stone-200 dark:border-slate-700 rounded-xl p-4 bg-white dark:bg-slate-800 shadow-2xs space-y-2">
               <div className="flex items-center gap-2 mb-1">
-                <Truck className="w-4 h-4 text-teal-800" />
-                <h4 className="font-bold text-xs uppercase text-stone-700 tracking-wider">
+                <Truck className="w-4 h-4 text-teal-800 dark:text-teal-400" />
+                <h4 className="font-bold text-xs uppercase text-stone-700 dark:text-slate-300 tracking-wider">
                   {language === 'BN' ? 'লজিস্টিকস ও স্পেসিফিকেশন' : 'Logistics & Specifications'}
                 </h4>
               </div>
 
-              <div className="text-xs space-y-1.5 bg-stone-50 p-3 rounded-lg border border-stone-200">
+              <div className="text-xs space-y-1.5 bg-stone-50 dark:bg-slate-900/60 p-3 rounded-lg border border-stone-200 dark:border-slate-700">
                 <div className="flex justify-between">
-                  <span className="text-stone-500">Shipping Weight:</span>
-                  <span className="font-mono font-semibold text-stone-900">
+                  <span className="text-stone-500 dark:text-slate-400">Shipping Weight:</span>
+                  <span className="font-mono font-semibold text-stone-900 dark:text-white">
                     {product.attributes?.weight ? `${product.attributes.weight} kg` : '0.50 kg'}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-stone-500">Reorder Alert Threshold:</span>
-                  <span className="font-mono font-semibold text-stone-900">
+                  <span className="text-stone-500 dark:text-slate-400">Reorder Alert Threshold:</span>
+                  <span className="font-mono font-semibold text-stone-900 dark:text-white">
                     {product.lowStockThreshold || 5} units
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-stone-500">Origin / Craft:</span>
-                  <span className="text-stone-800 font-medium">
+                  <span className="text-stone-500 dark:text-slate-400">Origin / Craft:</span>
+                  <span className="text-stone-800 dark:text-slate-200 font-medium">
                     {product.attributes?.origin || 'Bangladesh (Authentic Artisan Handloom)'}
                   </span>
                 </div>
@@ -360,10 +360,10 @@ export function ProductQuickViewModal({
           </div>
 
           {/* Quick Visibility Switchers */}
-          <div className="p-4 bg-stone-50 rounded-xl border border-stone-200 flex flex-wrap items-center justify-between gap-3">
+          <div className="p-4 bg-stone-50 dark:bg-slate-900/60 rounded-xl border border-stone-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-stone-500" />
-              <span className="text-xs font-bold text-stone-800">
+              <ShieldCheck className="w-4 h-4 text-stone-500 dark:text-slate-400" />
+              <span className="text-xs font-bold text-stone-800 dark:text-slate-200">
                 {language === 'BN' ? 'দ্রুত স্থিতি পরিবর্তন' : 'Quick Status Toggles:'}
               </span>
             </div>
@@ -373,8 +373,8 @@ export function ProductQuickViewModal({
                 onClick={() => onToggleStatus(product, 'readyToShip')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                   product.readyToShip
-                    ? 'bg-teal-900 text-white border-teal-900'
-                    : 'bg-white text-stone-600 border-stone-300 hover:bg-stone-100'
+                    ? 'bg-teal-900 dark:bg-teal-700 text-white border-teal-900 dark:border-teal-700'
+                    : 'bg-white dark:bg-slate-800 text-stone-600 dark:text-slate-300 border-stone-300 dark:border-slate-600 hover:bg-stone-100 dark:hover:bg-slate-700'
                 }`}
               >
                 {product.readyToShip ? '✔ Ready to Ship (Active)' : '○ Paused (Inactive)'}
@@ -385,7 +385,7 @@ export function ProductQuickViewModal({
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                   product.isFeatured
                     ? 'bg-amber-500 text-white border-amber-500'
-                    : 'bg-white text-stone-600 border-stone-300 hover:bg-stone-100'
+                    : 'bg-white dark:bg-slate-800 text-stone-600 dark:text-slate-300 border-stone-300 dark:border-slate-600 hover:bg-stone-100 dark:hover:bg-slate-700'
                 }`}
               >
                 {product.isFeatured ? '★ Featured Product' : '☆ Standard Item'}
@@ -396,14 +396,14 @@ export function ProductQuickViewModal({
         </div>
 
         {/* Modal Bottom Footer */}
-        <div className="px-6 py-3.5 border-t border-stone-200 bg-stone-50 flex items-center justify-between">
-          <span className="text-xs text-stone-400 font-mono">
+        <div className="px-6 py-3.5 border-t border-stone-200 dark:border-slate-700 bg-stone-50 dark:bg-slate-900 flex items-center justify-between">
+          <span className="text-xs text-stone-400 dark:text-slate-500 font-mono">
             ID: {product.id}
           </span>
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 rounded-lg text-xs font-bold transition-colors"
+              className="px-4 py-2 bg-white dark:bg-slate-800 hover:bg-stone-100 dark:hover:bg-slate-700 text-stone-700 dark:text-slate-200 border border-stone-300 dark:border-slate-600 rounded-lg text-xs font-bold transition-colors"
             >
               {language === 'BN' ? 'বন্ধ করুন' : 'Close'}
             </button>
@@ -412,7 +412,7 @@ export function ProductQuickViewModal({
                 onClose();
                 onEdit(product);
               }}
-              className="px-4 py-2 bg-teal-900 hover:bg-teal-950 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5"
+              className="px-4 py-2 bg-teal-900 hover:bg-teal-950 dark:bg-teal-700 dark:hover:bg-teal-800 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1.5"
             >
               <Edit2 className="w-3.5 h-3.5" />
               <span>{language === 'BN' ? 'সম্পূর্ণ সম্পাদনা' : 'Full Edit'}</span>

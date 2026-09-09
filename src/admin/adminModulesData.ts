@@ -21,7 +21,7 @@ export interface AdminModuleItem {
   descriptionBn: string;
   tasksEn: string[];
   tasksBn: string[];
-  badgeKey?: 'pendingOrders' | 'lowStock' | 'fraudAlerts';
+  badgeKey?: 'pendingOrders' | 'lowStock' | 'fraudAlerts' | 'pendingReturns';
 }
 
 export interface AdminSectionGroup {
@@ -190,6 +190,7 @@ export const ADMIN_SECTIONS_DATA: AdminSectionGroup[] = [
         roleBn: 'সাপোর্ট, ইনভেন্টরি ও ফাইন্যান্স',
         tagline: 'Unified RMA inspection, defective item verification, inventory restocking, and bKash/Nagad refund disbursements',
         taglineBn: 'রিটার্ন আবেদন যাচাই, ওয়্যারহাউসে রিসিভ ও কোয়ালিটি টেস্ট এবং বিকাশ, নগদ ও কার্ডের রিফান্ড প্রসেসিং',
+        badgeKey: 'pendingReturns',
         description: 'Integrated control center for customer return merchandise authorizations (RMA) and financial money-back reversals. Manage RMA receiving, physical inspection, restocking, and automated gateway refunds in one unified workflow.',
         descriptionBn: 'পণ্য ফেরত ও টাকা ফেরতের সমন্বিত ডেস্ক। কাস্টমারের রিটার্ন রিকোয়েস্ট পর্যালোচনা, ওয়্যারহাউসে মাল রিসিভ, ইনভেন্টরিতে ব্যাক করা এবং বিকাশ/নগদে সরাসরি রিফান্ড দেওয়ার পূর্ণাঙ্গ ব্যবস্থা।',
         tasksEn: [
@@ -698,8 +699,8 @@ export const ADMIN_SECTIONS_DATA: AdminSectionGroup[] = [
 ];
 
 export function getSectionBadgeCount(
-  badgeKey: 'pendingOrders' | 'lowStock' | 'fraudAlerts' | undefined,
-  counts: { pendingOrders: number; lowStock: number; fraudAlerts: number }
+  badgeKey: 'pendingOrders' | 'lowStock' | 'fraudAlerts' | 'pendingReturns' | undefined,
+  counts: { pendingOrders: number; lowStock: number; fraudAlerts: number; pendingReturns?: number }
 ): { count: number; label: string; labelBn: string; color: string } | null {
   if (!badgeKey) return null;
 
@@ -727,6 +728,15 @@ export function getSectionBadgeCount(
       label: `${counts.fraudAlerts} alert`,
       labelBn: `${counts.fraudAlerts}টি অ্যালার্ট`,
       color: 'bg-rose-700 text-white'
+    };
+  }
+
+  if (badgeKey === 'pendingReturns' && (counts.pendingReturns ?? 0) > 0) {
+    return {
+      count: counts.pendingReturns!,
+      label: `${counts.pendingReturns} rma`,
+      labelBn: `${counts.pendingReturns}টি আরএমএ`,
+      color: 'bg-purple-700 text-white'
     };
   }
 

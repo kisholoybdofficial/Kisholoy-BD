@@ -48,6 +48,7 @@ import { SupplierLoginPage } from './pages/supplier/SupplierLoginPage';
 import { SupplierPortalPage } from './pages/supplier/SupplierPortalPage';
 import { AppProvider, useApp } from './context/AppContext';
 import { Role } from './types';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 
 // Staff/Admin roles with access to Admin Management Suites
 const AUTHORIZED_ADMIN_ROLES: Role[] = [
@@ -115,6 +116,7 @@ export default function App() {
     <AppProvider>
       <BrowserRouter>
         <GlobalToast />
+        <OfflineIndicator />
         <Routes>
           {/* Customer Storefront Routes */}
           <Route element={<StorefrontLayout />}>

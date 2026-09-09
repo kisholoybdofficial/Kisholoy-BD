@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { PrintOrderDocumentsModal } from '../components/print/PrintOrderDocumentsModal';
+import { PrintPreviewModal } from '../components/print/PrintPreviewModal';
 import { Order, CustomCourierConfig } from '../types';
 import { AdminModalShell } from '../components/admin/AdminModalShell';
 import { usePendingAction } from '../hooks/usePendingAction';
@@ -959,11 +960,12 @@ export function ShipmentsAdmin() {
         )}
       </AdminModalShell>
 
-      {/* UNIFIED PRINT DOCUMENTS MODAL */}
+      {/* STANDARDIZED PRINT PREVIEW MODAL (PACKING SLIP & INVOICE) */}
       {labelOrder && (
-        <PrintOrderDocumentsModal
+        <PrintPreviewModal
           order={labelOrder}
           siteContent={siteContent}
+          initialDocType="PACKING_SLIP"
           onClose={() => setLabelOrder(null)}
         />
       )}

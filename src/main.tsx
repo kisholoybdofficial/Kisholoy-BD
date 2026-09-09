@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import { captureUtmOnVisit } from './utils/utmCapture';
 import { installApiAuthInterceptor } from './lib/apiClient';
+import { initPwaServiceWorker } from './lib/pwaRegister';
 
 // Attach session tokens to the legacy raw fetch('/api/...') call sites before
 // any component mounts, so server-side RBAC sees an identity.
@@ -11,6 +12,9 @@ installApiAuthInterceptor();
 
 // Marketing Command Center: one-time first-touch UTM capture for order attribution
 captureUtmOnVisit();
+
+// Progressive Web App: Register Service Worker for offline asset caching
+initPwaServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

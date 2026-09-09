@@ -469,14 +469,14 @@ export const FraudRiskDashboard: React.FC<FraudDashboardProps> = ({
       {/* Top Header & Quick Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-stone-900 p-4 sm:p-6 rounded-xl border border-gray-200 dark:border-stone-800 shadow-xs">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-start sm:items-center gap-3">
             <div className="p-2.5 bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 rounded-lg border border-rose-200 dark:border-rose-800/80 shrink-0">
-              <ShieldAlert className="w-6 h-6" />
+              <ShieldAlert className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <h1 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">Fraud Detection, Risk Engine & Anti-Abuse</h1>
+              <h1 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">Fraud Detection & Anti-Abuse</h1>
               <p className="text-xs sm:text-sm text-gray-500 dark:text-stone-400 mt-0.5">
-                Authoritative multi-factor scoring, fake order blocker, COD loss prevention & Blacklist registry
+                Authoritative multi-factor scoring, fake order blocker, and Blacklist registry
               </p>
             </div>
           </div>
@@ -496,7 +496,7 @@ export const FraudRiskDashboard: React.FC<FraudDashboardProps> = ({
           <button
             id="open-add-blacklist-modal-btn"
             onClick={() => setShowAddBlacklistModal(true)}
-            className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-medium text-white bg-rose-700 hover:bg-rose-800 rounded-lg shadow-xs transition-colors"
+            className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-medium text-white bg-rose-700 hover:bg-rose-800 rounded-lg shadow-xs transition-colors whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
             <span>{isBn ? '+ ব্ল্যাকলিস্ট' : 'Blacklist Target'}</span>
@@ -519,40 +519,40 @@ export const FraudRiskDashboard: React.FC<FraudDashboardProps> = ({
       {/* Real-Time Metrics & Security Posture */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-4">
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-gray-200 dark:border-stone-800 shadow-2xs">
-            <div className="text-[11px] font-semibold text-gray-500 dark:text-stone-400 uppercase tracking-wider">Total Evaluated</div>
-            <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mt-1">{stats.totalEvaluated}</div>
-            <div className="text-[11px] text-gray-400 dark:text-stone-500 mt-0.5">Live orders processed</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-gray-200 dark:border-stone-800 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-gray-500 dark:text-stone-400 uppercase tracking-wider truncate">Total Evaluated</div>
+            <div className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white mt-1">{stats.totalEvaluated}</div>
+            <div className="text-[10px] sm:text-[11px] text-gray-400 dark:text-stone-500 mt-0.5 truncate">Processed orders</div>
           </div>
 
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/20 dark:bg-emerald-950/20 shadow-2xs">
-            <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Low Risk (Clean)</div>
-            <div className="text-xl sm:text-2xl font-bold text-emerald-800 dark:text-emerald-300 mt-1">{stats.lowRiskCount}</div>
-            <div className="text-[11px] text-emerald-600 dark:text-emerald-400/80 mt-0.5">Auto-approved</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/20 dark:bg-emerald-950/20 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider truncate">Low Risk</div>
+            <div className="text-lg sm:text-2xl font-bold text-emerald-800 dark:text-emerald-300 mt-1">{stats.lowRiskCount}</div>
+            <div className="text-[10px] sm:text-[11px] text-emerald-600 dark:text-emerald-400/80 mt-0.5 truncate">Auto-approved</div>
           </div>
 
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-yellow-200 dark:border-yellow-800/60 bg-yellow-50/20 dark:bg-yellow-950/20 shadow-2xs">
-            <div className="text-[11px] font-semibold text-yellow-700 dark:text-yellow-400 uppercase tracking-wider">Medium Risk</div>
-            <div className="text-xl sm:text-2xl font-bold text-yellow-800 dark:text-yellow-300 mt-1">{stats.mediumRiskCount}</div>
-            <div className="text-[11px] text-yellow-600 dark:text-yellow-400/80 mt-0.5">Phone confirmation</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-yellow-200 dark:border-yellow-800/60 bg-yellow-50/20 dark:bg-yellow-950/20 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-yellow-700 dark:text-yellow-400 uppercase tracking-wider truncate">Medium Risk</div>
+            <div className="text-lg sm:text-2xl font-bold text-yellow-800 dark:text-yellow-300 mt-1">{stats.mediumRiskCount}</div>
+            <div className="text-[10px] sm:text-[11px] text-yellow-600 dark:text-yellow-400/80 mt-0.5 truncate">Phone confirm</div>
           </div>
 
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/20 dark:bg-amber-950/20 shadow-2xs">
-            <div className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">High Risk / COD</div>
-            <div className="text-xl sm:text-2xl font-bold text-amber-800 dark:text-amber-300 mt-1">{stats.highRiskCount}</div>
-            <div className="text-[11px] text-amber-600 dark:text-amber-400/80 mt-0.5">৳{stats.flaggedCodExposureBdt.toLocaleString()} COD at risk</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/20 dark:bg-amber-950/20 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">High Risk</div>
+            <div className="text-lg sm:text-2xl font-bold text-amber-800 dark:text-amber-300 mt-1">{stats.highRiskCount}</div>
+            <div className="text-[10px] sm:text-[11px] text-amber-600 dark:text-amber-400/80 mt-0.5 truncate">৳{stats.flaggedCodExposureBdt.toLocaleString()} COD</div>
           </div>
 
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-rose-200 dark:border-rose-800/60 bg-rose-50/20 dark:bg-rose-950/20 shadow-2xs">
-            <div className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider">Blocked / Fraud</div>
-            <div className="text-xl sm:text-2xl font-bold text-rose-800 dark:text-rose-300 mt-1">{stats.criticalSuspiciousCount}</div>
-            <div className="text-[11px] text-rose-600 dark:text-rose-400/80 mt-0.5">৳{stats.preventedLossBdt.toLocaleString()} loss saved</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-rose-200 dark:border-rose-800/60 bg-rose-50/20 dark:bg-rose-950/20 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider truncate">Blocked / Fraud</div>
+            <div className="text-lg sm:text-2xl font-bold text-rose-800 dark:text-rose-300 mt-1">{stats.criticalSuspiciousCount}</div>
+            <div className="text-[10px] sm:text-[11px] text-rose-600 dark:text-rose-400/80 mt-0.5 truncate">৳{stats.preventedLossBdt.toLocaleString()} saved</div>
           </div>
 
-          <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-gray-200 dark:border-stone-800 shadow-2xs">
-            <div className="text-[11px] font-semibold text-gray-500 dark:text-stone-400 uppercase tracking-wider">Active Blacklist</div>
-            <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mt-1">{stats.activeBlacklistCount}</div>
-            <div className="text-[11px] text-gray-400 dark:text-stone-500 mt-0.5">Phones, IPs, emails</div>
+          <div className="bg-white dark:bg-stone-900 p-3 sm:p-4 rounded-xl border border-gray-200 dark:border-stone-800 shadow-2xs">
+            <div className="text-[10px] sm:text-[11px] font-semibold text-gray-500 dark:text-stone-400 uppercase tracking-wider truncate">Active Blacklist</div>
+            <div className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white mt-1">{stats.activeBlacklistCount}</div>
+            <div className="text-[10px] sm:text-[11px] text-gray-400 dark:text-stone-500 mt-0.5 truncate">Phones, IPs</div>
           </div>
         </div>
       )}
@@ -562,53 +562,53 @@ export const FraudRiskDashboard: React.FC<FraudDashboardProps> = ({
         <button
           id="tab-fraud-queue"
           onClick={() => setActiveTab('queue')}
-          className={`flex items-center gap-2 py-3 sm:py-4 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
+          className={`flex items-center gap-2 py-3 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
             activeTab === 'queue'
-              ? 'border-rose-700 text-rose-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
+              ? 'border-rose-700 text-rose-700 dark:text-rose-400 font-bold bg-rose-50/30 dark:bg-rose-950/30'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-stone-400 dark:hover:text-stone-200'
           }`}
         >
           <Activity className="w-4 h-4" />
-          Risk Review Queue ({orders.filter(o => o.fraudRisk && o.fraudRisk.riskScore >= 30).length})
+          <span>Risk Queue ({orders.filter(o => o.fraudRisk && o.fraudRisk.riskScore >= 30).length})</span>
         </button>
 
         <button
           id="tab-fraud-blacklists"
           onClick={() => setActiveTab('blacklists')}
-          className={`flex items-center gap-2 py-3 sm:py-4 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
+          className={`flex items-center gap-2 py-3 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
             activeTab === 'blacklists'
-              ? 'border-rose-700 text-rose-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
+              ? 'border-rose-700 text-rose-700 dark:text-rose-400 font-bold bg-rose-50/30 dark:bg-rose-950/30'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-stone-400 dark:hover:text-stone-200'
           }`}
         >
           <Ban className="w-4 h-4" />
-          Blacklist & Watchlist ({blacklists.length})
+          <span>Blacklist ({blacklists.length})</span>
         </button>
 
         <button
           id="tab-fraud-rules"
           onClick={() => setActiveTab('rules')}
-          className={`flex items-center gap-2 py-3 sm:py-4 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
+          className={`flex items-center gap-2 py-3 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
             activeTab === 'rules'
-              ? 'border-rose-700 text-rose-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
+              ? 'border-rose-700 text-rose-700 dark:text-rose-400 font-bold bg-rose-50/30 dark:bg-rose-950/30'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-stone-400 dark:hover:text-stone-200'
           }`}
         >
           <Sliders className="w-4 h-4" />
-          Rule Weights & Thresholds
+          <span>Rules & Weights</span>
         </button>
 
         <button
           id="tab-fraud-sandbox"
           onClick={() => setActiveTab('sandbox')}
-          className={`flex items-center gap-2 py-3 sm:py-4 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
+          className={`flex items-center gap-2 py-3 px-3 sm:px-4 font-medium text-xs sm:text-sm border-b-2 transition-colors shrink-0 ${
             activeTab === 'sandbox'
-              ? 'border-rose-700 text-rose-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
+              ? 'border-rose-700 text-rose-700 dark:text-rose-400 font-bold bg-rose-50/30 dark:bg-rose-950/30'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-stone-400 dark:hover:text-stone-200'
           }`}
         >
           <Zap className="w-4 h-4" />
-          Live Risk Simulator & Sandbox
+          <span>Risk Sandbox</span>
         </button>
       </div>
 

@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { BusinessDocumentModal } from '../components/admin/BusinessDocumentModal';
 import { PrintOrderDocumentsModal } from '../components/print/PrintOrderDocumentsModal';
+import { PrintPreviewModal } from '../components/print/PrintPreviewModal';
 import { ReportPrintModal } from '../components/print/ReportPrintModal';
 import { AdminHelpButton } from '../components/admin/AdminHelpModal';
 import { REPORTS_HELP_DATA } from './reportsHelpData';
@@ -1294,11 +1295,12 @@ export function ReportsAdmin() {
         </div>
       )}
 
-      {/* Unified Order Print Modal (Invoice / Packing Slip) */}
+      {/* Standardized Order Print-Preview Modal (Invoice / Packing Slip) */}
       {documentModal.isOpen && documentModal.selectedOrder && (documentModal.type === 'INVOICE' || documentModal.type === 'PACKING_SLIP') && (
-        <PrintOrderDocumentsModal
+        <PrintPreviewModal
           order={documentModal.selectedOrder}
           siteContent={siteContent}
+          initialDocType={documentModal.type}
           onClose={() => setDocumentModal({ ...documentModal, isOpen: false })}
         />
       )}

@@ -5,6 +5,7 @@
  */
 
 import { serverDb } from './db';
+import { resendEmailService } from './resendEmailService';
 import { 
   NotificationChannel, 
   NotificationEventKey, 
@@ -201,18 +202,48 @@ export class NotificationService {
 
     const messageId = `${effectiveChannel.substring(0, 3)}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
+    let deliveryStatus: 'DELIVERED' | 'FAILED' = 'DELIVERED';
+    let resendDispatchError = '';
+
+    // If Email, dispatch via Resend API
+    if (effectiveChannel === 'EMAIL') {
+      try {
+        const emailResult = await resendEmailService.sendEmail({
+          to: params.recipient,
+          subject: subject || 'Kisholoy Order Notification',
+          html: resendEmailService.buildOrderEmailHtml({
+            orderNumber: params.variables?.orderNumber || 'KSH-LIVE',
+            customerName: params.variables?.customerName || 'সম্মানিত গ্রাহক',
+            items: [{ title: params.eventKey, quantity: 1, price: Number(params.variables?.totalAmount || '0') }],
+            totalAmount: Number(params.variables?.totalAmount || '0'),
+            shippingAddress: params.variables?.district || 'ঢাকা, বাংলাদেশ',
+            trackingUrl: params.variables?.trackingUrl,
+          }),
+          text: content,
+        });
+        if (!emailResult.success) {
+          deliveryStatus = 'FAILED';
+          resendDispatchError = emailResult.error || 'Failed to dispatch email';
+        }
+      } catch (e: any) {
+        deliveryStatus = 'FAILED';
+        resendDispatchError = e.message;
+      }
+    }
+
     // Generate gateway response payload
     const providerName = effectiveChannel === 'SMS' 
       ? serverDb.gatewayConfig.smsProvider 
-      : (effectiveChannel === 'WHATSAPP' ? serverDb.gatewayConfig.whatsappProvider : serverDb.gatewayConfig.emailProvider);
+      : (effectiveChannel === 'WHATSAPP' ? serverDb.gatewayConfig.whatsappProvider : (resendEmailService.isConfigured() ? 'RESEND' : serverDb.gatewayConfig.emailProvider));
 
     const gatewayResponse = JSON.stringify({
       provider: providerName,
-      status: 'DELIVRD',
+      status: deliveryStatus === 'DELIVERED' ? 'DELIVRD' : 'FAILED',
       messageId,
       recipient: params.recipient,
       channel: effectiveChannel,
       fallback: fallbackTriggered ? 'SMS_FALLBACK' : undefined,
+      error: resendDispatchError || undefined,
       timestamp: new Date().toISOString()
     });
 
@@ -224,7 +255,7 @@ export class NotificationService {
       language: lang,
       subject,
       content,
-      status: 'DELIVERED',
+      status: deliveryStatus,
       parts: smsTelemetry.parts,
       costBdt: smsTelemetry.costBdt,
       messageId,

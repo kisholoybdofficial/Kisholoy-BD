@@ -38,6 +38,7 @@ interface AppContextType {
   // Products & Categories
   products: Product[];
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
+  refreshProducts: () => Promise<void>;
   categories: Category[];
   setCategories: React.Dispatch<React.SetStateAction<Category[]>>;
   addProduct: (product: Omit<Product, 'id'>) => void;
@@ -397,7 +398,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (fbUser) {
         console.log('Firebase user logged in:', fbUser.email, fbUser.uid);
         // If logged in as admin email, escalate role to SUPER_ADMIN
-        if (fbUser.email === 'mdmuntasirshihab@gmail.com') {
+        if (fbUser.email === 'kisholoybd.official@gmail.com') {
           setCurrentRole('SUPER_ADMIN');
         }
         setCustomerProfile(prev => prev ? {
@@ -733,6 +734,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     addAuditLog('DELETE_PRODUCT', 'Product', prod?.sku || id, `Deleted product "${prod?.title}"`);
     showToast('Product removed from catalog');
+  };
+
+  const refreshProducts = async () => {
+    try {
+      const res = await fetch('/api/products');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.success && Array.isArray(data.products)) {
+          setProducts(data.products);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to refresh products:', err);
+    }
   };
 
   // Categories CRUD
@@ -2239,6 +2254,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTheme,
         products,
         setProducts,
+        refreshProducts,
         categories,
         setCategories,
         addProduct,

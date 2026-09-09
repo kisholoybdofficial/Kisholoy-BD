@@ -25,6 +25,7 @@ import {
   Check,
   Sun,
   Moon,
+  Monitor,
   Store,
   Leaf,
   Tag
@@ -33,6 +34,7 @@ import { useApp } from '../../context/AppContext';
 import { CustomerAuthModal } from '../auth/CustomerAuthModal';
 import { BrandLogo } from '../brand/BrandLogo';
 import { ThemeButton } from './ThemeButton';
+import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 export function Header() {
   const { 
@@ -314,8 +316,11 @@ export function Header() {
                 <Search className="w-4 h-4 text-teal-700 dark:text-teal-400" />
               </button>
 
-              {/* Display Mode Switcher (Desktop/Tablet) */}
-              <div className="hidden sm:inline-flex items-center justify-center">
+              {/* PWA Install Button */}
+              <PWAInstallButton />
+
+              {/* Display Mode Switcher (Visible on Mobile, Tablet & Desktop) */}
+              <div className="inline-flex items-center justify-center">
                 <ThemeButton />
               </div>
 
@@ -584,6 +589,79 @@ export function Header() {
                           </div>
                         </div>
                       </div>
+
+                      {/* 6. Display Theme / Dark Mode Settings */}
+                      <div className="px-3 py-2 rounded-xl text-xs font-medium text-stone-700 dark:text-slate-200 hover:bg-stone-50/80 dark:hover:bg-slate-800/60 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <div className="p-1.5 rounded-lg bg-stone-100 dark:bg-slate-800 text-stone-700 dark:text-slate-300">
+                              {theme === 'dark' ? (
+                                <Moon className="w-4 h-4 text-amber-400" />
+                              ) : theme === 'system' ? (
+                                <Monitor className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                              ) : (
+                                <Sun className="w-4 h-4 text-amber-500" />
+                              )}
+                            </div>
+                            <div>
+                              <span className="font-semibold block text-stone-900 dark:text-slate-100">
+                                {isBn ? 'থিম মোড' : 'Theme'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="inline-flex p-0.5 rounded-lg bg-stone-100 dark:bg-slate-800 border border-stone-200 dark:border-slate-700">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTheme('light');
+                              }}
+                              title={isBn ? 'লাইট মোড' : 'Light'}
+                              className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                                theme === 'light'
+                                  ? 'bg-teal-900 text-white shadow-2xs'
+                                  : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                              }`}
+                            >
+                              <Sun className="w-3 h-3" />
+                              <span className="text-[10px]">{isBn ? 'লাইট' : 'Light'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTheme('dark');
+                              }}
+                              title={isBn ? 'ডার্ক মোড' : 'Dark'}
+                              className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                                theme === 'dark'
+                                  ? 'bg-teal-900 text-white shadow-2xs'
+                                  : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                              }`}
+                            >
+                              <Moon className="w-3 h-3" />
+                              <span className="text-[10px]">{isBn ? 'ডার্ক' : 'Dark'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTheme('system');
+                              }}
+                              title={isBn ? 'অটো সিস্টেম' : 'Auto'}
+                              className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                                theme === 'system'
+                                  ? 'bg-teal-900 text-white shadow-2xs'
+                                  : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                              }`}
+                            >
+                              <Monitor className="w-3 h-3" />
+                              <span className="text-[10px]">{isBn ? 'অটো' : 'Auto'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Sign Out (for logged-in customers) */}
@@ -758,6 +836,7 @@ export function Header() {
             >
               {/* 1. Category Drawer Header & Fast Search */}
               <div className="p-3.5 sm:p-4 bg-stone-50/90 dark:bg-slate-900/80 border-b border-stone-200/80 dark:border-slate-800 space-y-2.5">
+                <PWAInstallButton variant="banner" />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 rounded-lg bg-teal-900 text-amber-300">
@@ -908,7 +987,94 @@ export function Header() {
                 })}
               </div>
 
-              {/* 3. Bottom Footer Note & Close Action */}
+              {/* 3. Mobile Preferences: Theme & Language Bar */}
+              <div className="p-3 bg-stone-50/90 dark:bg-slate-900/80 border-t border-stone-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 font-semibold text-stone-700 dark:text-slate-300">
+                    {theme === 'dark' ? (
+                      <Moon className="w-3.5 h-3.5 text-amber-400" />
+                    ) : theme === 'system' ? (
+                      <Monitor className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                    ) : (
+                      <Sun className="w-3.5 h-3.5 text-amber-500" />
+                    )}
+                    <span>{isBn ? 'ডিসপ্লে মোড (ডার্ক মোড)' : 'Display Theme'}</span>
+                  </div>
+
+                  <div className="inline-flex p-0.5 rounded-lg bg-stone-200/80 dark:bg-slate-800 border border-stone-300/60 dark:border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => setTheme('light')}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        theme === 'light'
+                          ? 'bg-white dark:bg-slate-700 text-teal-900 dark:text-white shadow-2xs'
+                          : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <Sun className="w-3 h-3 text-amber-500" />
+                      <span>{isBn ? 'লাইট' : 'Light'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTheme('dark')}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        theme === 'dark'
+                          ? 'bg-teal-900 text-white shadow-2xs'
+                          : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <Moon className="w-3 h-3 text-amber-300" />
+                      <span>{isBn ? 'ডার্ক' : 'Dark'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTheme('system')}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        theme === 'system'
+                          ? 'bg-teal-900 text-white shadow-2xs'
+                          : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <Monitor className="w-3 h-3 text-teal-400" />
+                      <span>{isBn ? 'অটো' : 'Auto'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1.5 border-t border-stone-200/60 dark:border-slate-800/80">
+                  <div className="flex items-center gap-1.5 font-semibold text-stone-700 dark:text-slate-300">
+                    <Languages className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                    <span>{isBn ? 'ভাষা (Language)' : 'Language'}</span>
+                  </div>
+
+                  <div className="inline-flex p-0.5 rounded-lg bg-stone-200/80 dark:bg-slate-800 border border-stone-300/60 dark:border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => setLanguage('BN')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        language === 'BN'
+                          ? 'bg-teal-900 text-white shadow-2xs'
+                          : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                      }`}
+                    >
+                      বাংলা
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLanguage('EN')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        language === 'EN'
+                          ? 'bg-teal-900 text-white shadow-2xs'
+                          : 'text-stone-600 dark:text-slate-400 hover:text-stone-900 dark:hover:text-white'
+                      }`}
+                    >
+                      English
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Bottom Footer Note & Close Action */}
               <div className="p-3 bg-stone-50 dark:bg-slate-900/60 border-t border-stone-150 dark:border-slate-800 flex items-center justify-between">
                 <span className="text-[11px] text-stone-500 dark:text-slate-400 font-medium">
                   {isBn ? 'কিশলয় • খাঁটি দেশীয় পণ্য' : 'Kisholoy • Authentic Crafts'}

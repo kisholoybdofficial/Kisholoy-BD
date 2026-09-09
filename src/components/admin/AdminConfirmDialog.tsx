@@ -201,7 +201,8 @@ export function AdminConfirmDialog({
     <div
       ref={containerRef}
       {...dialogProps}
-      className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150"
+      data-admin-modal="true"
+      className="admin-modal fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150"
       onMouseDown={(e) => {
         if (!isLoading && !requiresTypedConfirmation && e.target === e.currentTarget) {
           onClose();

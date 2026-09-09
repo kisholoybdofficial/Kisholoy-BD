@@ -117,6 +117,8 @@ const PUBLIC_MUTATION_PATTERNS: RegExp[] = [
   /^\/api\/webhooks\/receive/,
   // Marketing attribution beacon fired by the storefront
   /^\/api\/marketing\/command\/attributions$/,
+  // System diagnostic pings & connection verification
+  /^\/api\/(integrations|services)\//,
 ];
 
 /** Sensitive reads that must NOT be world-readable. */

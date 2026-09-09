@@ -19,6 +19,8 @@ import {
 import { securityEngine } from './securityEngine';
 import { normalizeBdMobilePhone } from '../src/lib/phone';
 import { defaultPrintSettings } from '../src/lib/printFormats';
+import { mongoService } from './mongoService';
+import { upstashRedisService } from './upstashService';
 import { 
   INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_ORDERS, 
   INITIAL_CUSTOMERS, INITIAL_CONTENT, INITIAL_AUDIT_LOGS, 
@@ -395,6 +397,8 @@ class ServerDatabase {
 
   addOrder(order: Order): void {
     this.orders.unshift(order);
+    mongoService.syncOrder(order).catch(() => {});
+    upstashRedisService.set(`order:${order.orderNumber}`, order, 86400).catch(() => {});
   }
 
   updateOrderStatus(orderId: string, status: Order['orderStatus'], note?: string, updatedBy = 'SYSTEM'): Order | undefined {
@@ -414,6 +418,8 @@ class ServerDatabase {
     });
 
     this.addAuditLog('UPDATE_ORDER_STATUS', 'Order', order.orderNumber, `Order status set to ${status}`);
+    mongoService.syncOrder(order).catch(() => {});
+    upstashRedisService.set(`order:${order.orderNumber}`, order, 86400).catch(() => {});
     return order;
   }
 
@@ -731,6 +737,7 @@ class ServerDatabase {
         category
       });
       this.auditLogs.unshift(chainedLog);
+      mongoService.syncAuditLog(chainedLog).catch(() => {});
       return chainedLog;
     } catch {
       const log: AuditLog = {
@@ -747,6 +754,7 @@ class ServerDatabase {
         category
       };
       this.auditLogs.unshift(log);
+      mongoService.syncAuditLog(log).catch(() => {});
       return log;
     }
   }

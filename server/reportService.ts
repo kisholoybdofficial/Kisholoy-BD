@@ -277,18 +277,15 @@ export class ReportService {
         });
       });
 
-      const fallbackUnits = unitsSold || Math.max(4, Math.floor(matchingProducts.length * 3));
-      const fallbackWeaver = weaverPayout || Math.floor(matchingProducts.reduce((s, p) => s + (p.costPrice * 3), 0));
-      const fallbackRetail = retailSales || Math.floor(matchingProducts.reduce((s, p) => s + (p.price * 3), 0));
-      const fairWagePct = fallbackRetail > 0 ? Number(((fallbackWeaver / fallbackRetail) * 100).toFixed(1)) : 65;
+      const fairWagePct = retailSales > 0 ? Number(((weaverPayout / retailSales) * 100).toFixed(1)) : (matchingProducts.length > 0 ? 65 : 0);
 
       return {
         originCluster: cluster,
         clusterBn: info.bn,
         productCount: matchingProducts.length,
-        unitsSold: fallbackUnits,
-        weaverPayoutDisbursed: fallbackWeaver,
-        retailSalesContribution: fallbackRetail,
+        unitsSold,
+        weaverPayoutDisbursed: weaverPayout,
+        retailSalesContribution: retailSales,
         fairWageMarginPct: fairWagePct
       };
     });
@@ -439,8 +436,8 @@ export class ReportService {
         date: dateStr,
         label: d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
         orders: dayOrders.length,
-        revenue: dayRev || Math.round(grossRevenue / 14 + (Math.sin(i) * 2000)),
-        profit: (dayRev - dayCost) || Math.round((grossRevenue / 14 + (Math.sin(i) * 2000)) * 0.38)
+        revenue: dayRev,
+        profit: dayRev > 0 ? (dayRev - dayCost) : 0
       });
     }
 

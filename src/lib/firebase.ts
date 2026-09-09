@@ -9,13 +9,27 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  getFirestore, 
+  doc, 
+  getDocFromServer, 
+  setDoc, 
+  getDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: getFirestore requires firestoreDatabaseId if specified
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// CRITICAL: Initialize Firestore with long-polling to prevent 10s connection timeouts in iframe/proxy environments
+export const db = initializeFirestore(
+  app,
+  {
+    experimentalForceLongPolling: true,
+  },
+  firebaseConfig.firestoreDatabaseId
+);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -99,7 +113,7 @@ export async function signInWithGoogle() {
           email: user.email || '',
           displayName: user.displayName || 'Kisholoy User',
           photoURL: user.photoURL || '',
-          role: user.email === 'mdmuntasirshihab@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
+          role: user.email === 'kisholoybd.official@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         });

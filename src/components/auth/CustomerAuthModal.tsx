@@ -108,7 +108,7 @@ export const CustomerAuthModal: React.FC<CustomerAuthModalProps> = ({
           userName: user.displayName || 'Google User',
           userPhone: user.phoneNumber || 'Google Account',
           userEmail: user.email || '',
-          role: user.email === 'mdmuntasirshihab@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
+          role: user.email === 'kisholoybd.official@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
           eventType: 'LOGIN_SUCCESS',
           district: 'Dhaka',
           device: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile (Chrome)' : 'Desktop (Browser)',

@@ -4,5 +4,6 @@ coverage/
 *.log
 .env*
 !.env.example
+firebase-service-account*.json
 
 docs/audit/.phase3.json

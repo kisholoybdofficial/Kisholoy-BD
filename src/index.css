@@ -681,3 +681,205 @@ html.dark #admin-main-viewport .text-indigo-800,
 html.dark #admin-main-viewport .text-indigo-900 {
   color: #a5b4fc !important;
 }
+
+/* =========================================================================
+   Admin Dashboard Tactile Feedback: Touch Ripple & Active Scale Animations
+   ========================================================================= */
+
+/* Host element for ripple positioning */
+.admin-ripple-host {
+  position: relative !important;
+}
+
+/* Ripple surface container matching the host border radius */
+.admin-ripple-surface {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* Subtle, expanding wave animation */
+.admin-ripple-wave {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: scale(0);
+  opacity: 0.32;
+  background-color: currentColor;
+  animation: admin-tactile-ripple 520ms cubic-bezier(0.1, 0.5, 0.1, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes admin-tactile-ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.32;
+  }
+  50% {
+    opacity: 0.2;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+/* Active Scale Feedback on Tap for all Interactive Elements */
+#admin-root-layout button:not(:disabled):not([aria-disabled="true"]),
+#admin-root-layout a[href]:not([aria-disabled="true"]),
+#admin-root-layout [role="button"]:not([aria-disabled="true"]),
+#admin-root-layout select:not(:disabled),
+#admin-root-layout summary,
+#admin-root-layout .admin-tap-target,
+.admin-tactile-scope button:not(:disabled):not([aria-disabled="true"]),
+.admin-tactile-scope a[href]:not([aria-disabled="true"]),
+.admin-tactile-scope [role="button"]:not([aria-disabled="true"]),
+[role="dialog"] button:not(:disabled):not([aria-disabled="true"]),
+[role="dialog"] a[href]:not([aria-disabled="true"]),
+[role="dialog"] [role="button"]:not([aria-disabled="true"]),
+[role="dialog"] select:not(:disabled),
+[role="alertdialog"] button:not(:disabled):not([aria-disabled="true"]),
+[role="alertdialog"] a[href]:not([aria-disabled="true"]),
+[role="alertdialog"] [role="button"]:not([aria-disabled="true"]),
+.admin-modal button:not(:disabled):not([aria-disabled="true"]),
+.admin-modal a[href]:not([aria-disabled="true"]),
+.admin-modal [role="button"]:not([aria-disabled="true"]),
+[data-admin-modal] button:not(:disabled):not([aria-disabled="true"]),
+[data-admin-modal] a[href]:not([aria-disabled="true"]),
+[data-admin-modal] [role="button"]:not([aria-disabled="true"]) {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: scale 0.12s cubic-bezier(0.2, 0, 0, 1), transform 0.12s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.12s ease;
+}
+
+/* Subtle 2.5% scale compression on tap and programmatic active press */
+#admin-root-layout button:not(:disabled):not([aria-disabled="true"]):active,
+#admin-root-layout a[href]:not([aria-disabled="true"]):active,
+#admin-root-layout [role="button"]:not([aria-disabled="true"]):active,
+#admin-root-layout select:not(:disabled):active,
+#admin-root-layout summary:active,
+#admin-root-layout .admin-tap-target:active,
+.admin-tactile-scope button:not(:disabled):not([aria-disabled="true"]):active,
+.admin-tactile-scope a[href]:not([aria-disabled="true"]):active,
+.admin-tactile-scope [role="button"]:not([aria-disabled="true"]):active,
+[role="dialog"] button:not(:disabled):not([aria-disabled="true"]):active,
+[role="dialog"] a[href]:not([aria-disabled="true"]):active,
+[role="dialog"] [role="button"]:not([aria-disabled="true"]):active,
+[role="dialog"] select:not(:disabled):active,
+[role="alertdialog"] button:not(:disabled):not([aria-disabled="true"]):active,
+[role="alertdialog"] [role="button"]:not([aria-disabled="true"]):active,
+.admin-modal button:not(:disabled):not([aria-disabled="true"]):active,
+.admin-modal [role="button"]:not([aria-disabled="true"]):active,
+[data-admin-modal] button:not(:disabled):not([aria-disabled="true"]):active,
+[data-admin-modal] [role="button"]:not([aria-disabled="true"]):active,
+.admin-active-scale:not(:disabled):not([aria-disabled="true"]) {
+  scale: 0.975;
+}
+
+/* Fallback for browsers that do not yet support individual scale property */
+@supports not (scale: 0.98) {
+  #admin-root-layout button:not(:disabled):not([aria-disabled="true"]):active,
+  #admin-root-layout a[href]:not([aria-disabled="true"]):active,
+  #admin-root-layout [role="button"]:not([aria-disabled="true"]):active,
+  #admin-root-layout select:not(:disabled):active,
+  #admin-root-layout summary:active,
+  #admin-root-layout .admin-tap-target:active,
+  [role="dialog"] button:not(:disabled):not([aria-disabled="true"]):active,
+  [role="dialog"] a[href]:not([aria-disabled="true"]):active,
+  [role="dialog"] [role="button"]:not([aria-disabled="true"]):active,
+  [role="dialog"] select:not(:disabled):active,
+  .admin-modal button:not(:disabled):not([aria-disabled="true"]):active,
+  .admin-modal [role="button"]:not([aria-disabled="true"]):active,
+  [data-admin-modal] button:not(:disabled):not([aria-disabled="true"]):active,
+  [data-admin-modal] [role="button"]:not([aria-disabled="true"]):active,
+  .admin-active-scale:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.975);
+  }
+}
+
+/* Disabled interactive elements must not scale */
+#admin-root-layout button:disabled,
+#admin-root-layout button[aria-disabled="true"],
+#admin-root-layout a[aria-disabled="true"],
+[role="dialog"] button:disabled,
+[role="dialog"] button[aria-disabled="true"],
+.admin-modal button:disabled,
+.admin-modal button[aria-disabled="true"],
+[data-admin-modal] button:disabled,
+[data-admin-modal] button[aria-disabled="true"] {
+  scale: 1 !important;
+  cursor: not-allowed;
+}
+
+/* Respect motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  #admin-root-layout button,
+  #admin-root-layout a,
+  #admin-root-layout [role="button"],
+  #admin-root-layout select,
+  #admin-root-layout summary,
+  #admin-root-layout .admin-tap-target,
+  [role="dialog"] button,
+  [role="dialog"] a,
+  [role="dialog"] [role="button"],
+  .admin-modal button,
+  .admin-modal a,
+  .admin-modal [role="button"],
+  .admin-active-scale {
+    scale: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .admin-ripple-wave {
+    display: none !important;
+    animation: none !important;
+  }
+}
+
+/* =========================================================================
+   Dev-Only: Touch Target & Ripple Bounding Box Debug Overlay
+   ========================================================================= */
+.admin-debug-touch-targets #admin-root-layout button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets #admin-root-layout a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets #admin-root-layout [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets #admin-root-layout select:not(:disabled),
+.admin-debug-touch-targets #admin-root-layout summary,
+.admin-debug-touch-targets #admin-root-layout .admin-tap-target,
+.admin-debug-touch-targets #admin-root-layout input[type="button"],
+.admin-debug-touch-targets #admin-root-layout input[type="submit"],
+.admin-debug-touch-targets .admin-tactile-scope button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets .admin-tactile-scope a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets .admin-tactile-scope [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="dialog"] button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="dialog"] a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="dialog"] [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="dialog"] select:not(:disabled),
+.admin-debug-touch-targets [role="alertdialog"] button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="alertdialog"] a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [role="alertdialog"] [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets .admin-modal button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets .admin-modal a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets .admin-modal [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [data-admin-modal] button:not(:disabled):not([aria-disabled="true"]),
+.admin-debug-touch-targets [data-admin-modal] a[href]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [data-admin-modal] [role="button"]:not([aria-disabled="true"]),
+.admin-debug-touch-targets [data-tactile-target="true"] {
+  outline: 2px dashed #0284c7 !important; /* Cyan 600 bounding box */
+  outline-offset: 1px !important;
+  box-shadow: 0 0 0 1px rgba(2, 132, 199, 0.3) inset !important;
+}
+
+/* Warn when touch target is under 44px on either axis */
+.admin-debug-touch-targets [data-tactile-substandard="true"] {
+  outline: 2px dashed #f59e0b !important; /* Amber 500 warning */
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3) inset !important;
+}
+
+/* Subtle tint on ripple surfaces in debug mode */
+.admin-debug-touch-targets .admin-ripple-surface {
+  background-color: rgba(2, 132, 199, 0.08) !important;
+}
+

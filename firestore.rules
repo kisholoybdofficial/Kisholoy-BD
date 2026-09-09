@@ -25,7 +25,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'mdmuntasirshihab@gmail.com' ||
+        request.auth.token.email == 'kisholoybd.official@gmail.com' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['SUPER_ADMIN', 'ADMIN'])
       );
@@ -66,6 +66,11 @@ service cloud.firestore {
     // Default Deny
     match /{document=**} {
       allow read, write: if false;
+    }
+
+    // Connectivity Test Document
+    match /test/connection {
+      allow read: if true;
     }
 
     // Users Collection

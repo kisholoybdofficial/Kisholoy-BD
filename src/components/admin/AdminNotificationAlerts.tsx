@@ -307,7 +307,7 @@ export function AdminNotificationAlerts() {
             playAlertChime('NORMAL');
           }
         }}
-        className={`relative p-2 rounded-xl transition-all border ${
+        className={`relative min-h-[44px] min-w-[44px] h-11 w-11 flex items-center justify-center rounded-xl transition-all border ${
           activeAlerts.length > 0
             ? criticalCount > 0
               ? 'bg-rose-100 text-rose-900 border-rose-300 hover:bg-rose-200 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-700/80 dark:hover:bg-rose-900 shadow-xs ring-1 ring-rose-500/30'
@@ -378,29 +378,29 @@ export function AdminNotificationAlerts() {
                   setSoundEnabled(!soundEnabled);
                   showToast(soundEnabled ? (isBn ? 'অ্যালার্ট শব্দ বন্ধ' : 'Audio alerts muted') : (isBn ? 'অ্যালার্ট শব্দ চালু' : 'Audio alerts enabled'));
                 }}
-                className={`p-1.5 rounded-lg transition-colors ${
+                className={`min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl transition-colors ${
                   soundEnabled 
                     ? 'text-teal-700 dark:text-teal-400 hover:bg-stone-200 dark:hover:bg-stone-800' 
                     : 'text-stone-400 dark:text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-800'
                 }`}
                 title={soundEnabled ? (isBn ? 'শব্দ মিউট করুন' : 'Mute Alert Chimes') : (isBn ? 'শব্দ চালু করুন' : 'Unmute Alert Chimes')}
               >
-                {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 dark:hover:text-white hover:bg-stone-200 dark:hover:bg-stone-800 transition-colors"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-stone-400 hover:text-stone-700 dark:hover:text-white hover:bg-stone-200 dark:hover:bg-stone-800 transition-colors"
                 title={isBn ? 'বন্ধ করুন' : 'Close'}
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
 
           {/* Urgent Summary Strip (If Critical Fraud / Settlement Present) */}
           {(fraudCount > 0 || settlementCount > 0) && (
-            <div className="px-4 py-2 bg-rose-50 dark:bg-rose-950/70 border-b border-rose-200 dark:border-rose-900/50 flex items-center justify-between text-[11px]">
+            <div className="px-4 py-2.5 bg-rose-50 dark:bg-rose-950/70 border-b border-rose-200 dark:border-rose-900/50 flex items-center justify-between text-[11px]">
               <div className="flex items-center gap-2 text-rose-900 dark:text-rose-200">
                 <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                 <span>
@@ -410,7 +410,7 @@ export function AdminNotificationAlerts() {
               <button
                 type="button"
                 onClick={handleDismissAll}
-                className="text-[10px] font-semibold text-rose-700 dark:text-rose-300 hover:underline"
+                className="min-h-[44px] px-2 flex items-center text-[10px] font-semibold text-rose-700 dark:text-rose-300 hover:underline"
               >
                 {isBn ? 'সবগুলো গ্রহণ করুন' : 'Acknowledge All'}
               </button>
@@ -418,11 +418,11 @@ export function AdminNotificationAlerts() {
           )}
 
           {/* Category Filter Tabs */}
-          <div className="flex items-center gap-1 p-2 bg-stone-50 dark:bg-stone-950/80 border-b border-stone-200 dark:border-stone-800 text-[11px] overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1.5 p-2 bg-stone-50 dark:bg-stone-950/80 border-b border-stone-200 dark:border-stone-800 text-[11px] overflow-x-auto no-scrollbar">
             <button
               type="button"
               onClick={() => setSelectedFilter('ALL')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-colors shrink-0 ${
+              className={`min-h-[44px] px-3 py-2 rounded-xl font-semibold transition-colors shrink-0 flex items-center ${
                 selectedFilter === 'ALL'
                   ? 'bg-teal-800 text-white shadow-2xs'
                   : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 hover:bg-stone-200/70 dark:hover:bg-stone-800'
@@ -433,26 +433,26 @@ export function AdminNotificationAlerts() {
             <button
               type="button"
               onClick={() => setSelectedFilter('FRAUD')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-colors shrink-0 flex items-center gap-1 ${
+              className={`min-h-[44px] px-3 py-2 rounded-xl font-semibold transition-colors shrink-0 flex items-center gap-1.5 ${
                 selectedFilter === 'FRAUD'
                   ? 'bg-rose-700 text-white shadow-2xs'
                   : 'text-stone-600 dark:text-stone-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-stone-800'
               }`}
             >
-              <ShieldAlert className="w-3 h-3 text-rose-500" />
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
               <span>{isBn ? 'জালিয়াতি' : 'Fraud Risk'}</span>
               {fraudCount > 0 && <span className="px-1 bg-rose-200 dark:bg-rose-900 text-rose-900 dark:text-rose-200 rounded text-[9px] font-mono">{fraudCount}</span>}
             </button>
             <button
               type="button"
               onClick={() => setSelectedFilter('SETTLEMENT')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-colors shrink-0 flex items-center gap-1 ${
+              className={`min-h-[44px] px-3 py-2 rounded-xl font-semibold transition-colors shrink-0 flex items-center gap-1.5 ${
                 selectedFilter === 'SETTLEMENT'
                   ? 'bg-amber-700 text-white shadow-2xs'
                   : 'text-stone-600 dark:text-stone-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-stone-800'
               }`}
             >
-              <Landmark className="w-3 h-3 text-amber-500" />
+              <Landmark className="w-3.5 h-3.5 text-amber-500" />
               <span>{isBn ? 'সেটেলমেন্ট' : 'Settlements'}</span>
               {settlementCount > 0 && <span className="px-1 bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 rounded text-[9px] font-mono">{settlementCount}</span>}
             </button>
@@ -530,10 +530,10 @@ export function AdminNotificationAlerts() {
                     <button
                       type="button"
                       onClick={(e) => handleDismissAlert(alert.id, e)}
-                      className="text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 p-0.5 rounded transition-colors"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 rounded-lg transition-colors"
                       title={isBn ? 'বাতিল করুন' : 'Dismiss alert'}
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
 
@@ -561,9 +561,9 @@ export function AdminNotificationAlerts() {
                             alert.onQuickAction?.();
                             handleDismissAlert(alert.id);
                           }}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold transition-colors flex items-center gap-1"
+                          className="min-h-[44px] px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold transition-colors flex items-center gap-1"
                         >
-                          <Check className="w-3 h-3" />
+                          <Check className="w-3.5 h-3.5" />
                           <span>{isBn ? 'কুইক সেটেল' : 'Quick Settle'}</span>
                         </button>
                       )}
@@ -571,14 +571,14 @@ export function AdminNotificationAlerts() {
                       <button
                         type="button"
                         onClick={() => handleActionClick(alert)}
-                        className={`px-3 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        className={`min-h-[44px] px-3.5 py-2 rounded-xl font-semibold transition-colors flex items-center gap-1.5 ${
                           alert.severity === 'CRITICAL'
                             ? 'bg-rose-700 hover:bg-rose-800 text-white'
                             : 'bg-teal-800 hover:bg-teal-900 text-white'
                         }`}
                       >
                         <span>{alert.actionLabel}</span>
-                        <ArrowRight className="w-3 h-3" />
+                        <ArrowRight className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>

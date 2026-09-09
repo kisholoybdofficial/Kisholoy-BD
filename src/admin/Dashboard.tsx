@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ADMIN_SECTIONS_DATA } from './adminModulesData';
+import { ServicesDiagnosticCard } from '../components/admin/ServicesDiagnosticCard';
 import {
   Order, CategoryMetric, DistrictMetric, CustomerCohortMetric,
   CourierPerformanceMetric, SalesTrendPoint, FinancialPnLReport, InventoryVelocityMetric,
@@ -226,6 +227,8 @@ export function Dashboard() {
   const [supplierLoadFailed, setSupplierLoadFailed] = useState(false);
   const [activeSectionFilter, setActiveSectionFilter] = useState<string>('all');
 
+  const ordersSig = useMemo(() => orders.map(o => `${o.id}:${o.orderStatus}`).join(','), [orders]);
+
   // Fetch server analytics report (range-aware)
   useEffect(() => {
     let cancelled = false;
@@ -259,7 +262,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [range, customFrom, customTo, orders.length]);
+  }, [range, customFrom, customTo, ordersSig]);
 
   // Vendor payable (all suppliers outstanding) + vendor name map
   useEffect(() => {
@@ -410,18 +413,18 @@ export function Dashboard() {
   return (
     <div id="admin-dashboard-container" role="region" aria-label="Dashboard overview" className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header Banner */}
-      <div id="dashboard-header-banner" className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200/90 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div id="dashboard-header-banner" className="bg-white dark:bg-slate-800 p-6 sm:p-8 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2">
           <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase bg-teal-50 text-teal-950 border border-teal-200 shadow-2xs">
+            <span className="px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase bg-teal-50 dark:bg-teal-950/60 text-teal-950 dark:text-teal-300 border border-teal-200 dark:border-teal-800/80 shadow-2xs">
               {isBn ? 'বিজনেস কন্ট্রোল সেন্টার' : 'BUSINESS CONTROL CENTER'}
             </span>
-            <span className="text-xs text-stone-400 font-mono font-medium">{isBn ? 'লাইভ অ্যানালিটিক্স' : 'LIVE BUSINESS ANALYTICS'}</span>
+            <span className="text-xs text-stone-400 dark:text-slate-400 font-mono font-medium">{isBn ? 'লাইভ অ্যানালিটিক্স' : 'LIVE BUSINESS ANALYTICS'}</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-serif font-black text-stone-900 tracking-tight">
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-serif font-black text-stone-900 dark:text-white tracking-tight">
             {isBn ? 'বাণিজ্য ও অপারেশনস ড্যাশবোর্ড' : 'Commerce & Operations Dashboard'}
           </h1>
-          <p className="text-xs sm:text-sm text-stone-500 max-w-2xl leading-relaxed">
+          <p className="text-xs sm:text-sm text-stone-500 dark:text-slate-300 max-w-2xl leading-relaxed">
             {isBn
               ? 'বিক্রয়, মুনাফা, গ্রাহক, ফুলফিলমেন্ট ও আর্থিক সূচকের এক নজরে সংযুক্ত ভিউ।'
               : 'Unified view of sales, profit, customer, fulfillment and financial metrics.'}
@@ -433,17 +436,20 @@ export function Dashboard() {
             <ShoppingCart className="w-4 h-4 text-teal-300" />
             <span>{isBn ? `ফুলফিলমেন্ট কিউ (${pendingOrders + readyToShip})` : `Fulfillment Queue (${pendingOrders + readyToShip})`}</span>
           </Link>
-          <Link to="/admin/reports" className="px-4 py-2.5 bg-stone-900 hover:bg-black text-white rounded-2xl text-xs font-bold shadow-xs transition-all flex items-center gap-2">
+          <Link to="/admin/reports" className="px-4 py-2.5 bg-stone-900 hover:bg-black dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-2xl text-xs font-bold shadow-xs transition-all flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-teal-300" />
             <span>{isBn ? 'রিপোর্ট' : 'Reports'}</span>
           </Link>
         </div>
       </div>
 
+      {/* Cloud Services Diagnostics (Supabase, Firebase, MongoDB, Redis) */}
+      <ServicesDiagnosticCard />
+
       {/* Range Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-stone-200/90 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-stone-500">
-          <Filter className="w-4 h-4 text-teal-800" />
+      <div id="dashboard-range-bar" className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-stone-200/90 dark:border-slate-700 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-stone-500 dark:text-slate-400">
+          <Filter className="w-4 h-4 text-teal-800 dark:text-teal-400" />
           <span className="text-xs font-bold uppercase tracking-wider">{isBn ? 'রিপোর্ট সময়সীমা' : 'Report Period'}</span>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -454,7 +460,7 @@ export function Dashboard() {
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
                 range === o.key
                   ? 'bg-teal-900 text-white shadow-2xs'
-                  : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                  : 'bg-stone-100 dark:bg-slate-700 text-stone-600 dark:text-slate-300 hover:bg-stone-200 dark:hover:bg-slate-600'
               }`}
             >
               {isBn ? o.labelBn : o.label}
@@ -463,10 +469,10 @@ export function Dashboard() {
         </div>
         {range === 'CUSTOM' && (
           <div className="flex items-center gap-2 text-xs">
-            <Calendar className="w-4 h-4 text-stone-400" />
-            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1.5 bg-white text-stone-800" />
-            <span className="text-stone-400">–</span>
-            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1.5 bg-white text-stone-800" />
+            <Calendar className="w-4 h-4 text-stone-400 dark:text-slate-400" />
+            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="border border-stone-300 dark:border-slate-600 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-900 text-stone-800 dark:text-slate-100" />
+            <span className="text-stone-400 dark:text-slate-500">–</span>
+            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border border-stone-300 dark:border-slate-600 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-900 text-stone-800 dark:text-slate-100" />
           </div>
         )}
       </div>
@@ -621,6 +627,69 @@ export function Dashboard() {
             <Metric label={isBn ? 'পার্টনার বিক্রয়' : 'Partner'} value={fmtMoney(inHouseVsPartner.partner)} />
           </div>
         </section>
+
+        {/* Profit by product */}
+        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
+          <SectionHeader title="Profit by Product" titleBn="পণ্য অনুযায়ী মুনাফা" icon={<Package className="w-4 h-4" />} link="/admin/products" linkText={isBn ? 'পণ্য' : 'Products'} isBn={isBn} />
+          {profitByProduct.length ? (
+            profitByProduct.map((p) => (
+              <MiniBar key={p.sku} label={p.title.substring(0, 30)} value={p.profit} display={fmtMoney(p.profit)} max={maxProfit} tone="bg-violet-700" />
+            ))
+          ) : (
+            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
+          )}
+        </section>
+
+        {/* Expense by category */}
+        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
+          <SectionHeader title="Expense by Category" titleBn="খরচের ধরন অনুযায়ী" icon={<Banknote className="w-4 h-4" />} link="/admin/finance" linkText={isBn ? 'আর্থিক' : 'Finance'} isBn={isBn} />
+          {expenseByCategory.length ? (
+            expenseByCategory.slice(0, 6).map(([cat, amt]) => (
+              <MiniBar key={cat} label={cat.replace('_', ' ')} value={amt} display={fmtMoney(amt)} max={maxExpense} tone="bg-stone-700" />
+            ))
+          ) : (
+            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
+          )}
+        </section>
+      </div>
+
+      {/* Return reasons, Profit by Vendor, and Inventory Velocity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Return reasons */}
+        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
+          <SectionHeader title="Return Reasons" titleBn="ফেরতের কারণ" icon={<RotateCcw className="w-4 h-4" />} link="/admin/returns" linkText={isBn ? 'রিটার্ন' : 'Returns'} isBn={isBn} />
+          {returnReasons.length ? (
+            returnReasons.map(([r, n]) => (
+              <MiniBar key={r} label={r.replace('_', ' ')} value={n} display={fmtN(n)} max={maxReturn} tone="bg-rose-700" />
+            ))
+          ) : (
+            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
+          )}
+        </section>
+
+        {/* Profit by Vendor */}
+        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
+          <SectionHeader title="Profit by Vendor" titleBn="উদ্যোক্তা অনুযায়ী মুনাফা" icon={<Landmark className="w-4 h-4" />} link="/admin/suppliers" linkText={isBn ? 'সাপ্লায়ার' : 'Vendors'} isBn={isBn} />
+          {profitByVendor.length ? (
+            profitByVendor.map((v, i) => (
+              <MiniBar key={i} label={v.name.substring(0, 30)} value={v.profit} display={fmtMoney(v.profit)} max={maxVendorProfit} tone="bg-indigo-700" />
+            ))
+          ) : (
+            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
+          )}
+        </section>
+
+        {/* Inventory health */}
+        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
+          <SectionHeader title="Inventory Velocity" titleBn="ইনভেন্টরি গতি" icon={<PackagePlus className="w-4 h-4" />} link="/admin/inventory" linkText={isBn ? 'ইনভেন্টরি' : 'Inventory'} isBn={isBn} />
+          {(report?.inventoryVelocityMetrics || []).length ? (
+            report!.inventoryVelocityMetrics.slice().sort((a, b) => b.unitsSold - a.unitsSold).slice(0, 5).map((i) => (
+              <MiniBar key={i.sku} label={i.title.substring(0, 30)} value={i.unitsSold} display={`${fmtN(i.unitsSold)}u • ${i.velocityStatus.replace('_', ' ')}`} max={Math.max(1, ...report!.inventoryVelocityMetrics.map((x) => x.unitsSold))} tone="bg-teal-700" />
+            ))
+          ) : (
+            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
+          )}
+        </section>
       </div>
 
       {/* SECTION DIRECTORY & WORK BREAKDOWN */}
@@ -711,84 +780,20 @@ export function Dashboard() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Profit by product */}
-        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
-          <SectionHeader title="Profit by Product" titleBn="পণ্য অনুযায়ী মুনাফা" icon={<Package className="w-4 h-4" />} link="/admin/products" linkText={isBn ? 'পণ্য' : 'Products'} isBn={isBn} />
-          {profitByProduct.length ? (
-            profitByProduct.map((p) => (
-              <MiniBar key={p.sku} label={p.title.substring(0, 30)} value={p.profit} display={fmtMoney(p.profit)} max={maxProfit} tone="bg-violet-700" />
-            ))
-          ) : (
-            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
-          )}
-        </section>
-
-        {/* Expense by category */}
-        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
-          <SectionHeader title="Expense by Category" titleBn="খরচের ধরন অনুযায়ী" icon={<Banknote className="w-4 h-4" />} link="/admin/finance" linkText={isBn ? 'আর্থিক' : 'Finance'} isBn={isBn} />
-          {expenseByCategory.length ? (
-            expenseByCategory.slice(0, 6).map(([cat, amt]) => (
-              <MiniBar key={cat} label={cat.replace('_', ' ')} value={amt} display={fmtMoney(amt)} max={maxExpense} tone="bg-stone-700" />
-            ))
-          ) : (
-            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
-          )}
-        </section>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Return reasons */}
-        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
-          <SectionHeader title="Return Reasons" titleBn="ফেরতের কারণ" icon={<RotateCcw className="w-4 h-4" />} link="/admin/returns" linkText={isBn ? 'রিটার্ন' : 'Returns'} isBn={isBn} />
-          {returnReasons.length ? (
-            returnReasons.map(([r, n]) => (
-              <MiniBar key={r} label={r.replace('_', ' ')} value={n} display={fmtN(n)} max={maxReturn} tone="bg-rose-700" />
-            ))
-          ) : (
-            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
-          )}
-        </section>
-
-        {/* Profit by Vendor */}
-        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
-          <SectionHeader title="Profit by Vendor" titleBn="উদ্যোক্তা অনুযায়ী মুনাফা" icon={<Landmark className="w-4 h-4" />} link="/admin/suppliers" linkText={isBn ? 'সাপ্লায়ার' : 'Vendors'} isBn={isBn} />
-          {profitByVendor.length ? (
-            profitByVendor.map((v, i) => (
-              <MiniBar key={i} label={v.name.substring(0, 30)} value={v.profit} display={fmtMoney(v.profit)} max={maxVendorProfit} tone="bg-indigo-700" />
-            ))
-          ) : (
-            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
-          )}
-        </section>
-
-        {/* Inventory health */}
-        <section className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-xs p-6">
-          <SectionHeader title="Inventory Velocity" titleBn="ইনভেন্টরি গতি" icon={<PackagePlus className="w-4 h-4" />} link="/admin/inventory" linkText={isBn ? 'ইনভেন্টরি' : 'Inventory'} isBn={isBn} />
-          {(report?.inventoryVelocityMetrics || []).length ? (
-            report!.inventoryVelocityMetrics.slice().sort((a, b) => b.unitsSold - a.unitsSold).slice(0, 5).map((i) => (
-              <MiniBar key={i.sku} label={i.title.substring(0, 30)} value={i.unitsSold} display={`${fmtN(i.unitsSold)}u • ${i.velocityStatus.replace('_', ' ')}`} max={Math.max(1, ...report!.inventoryVelocityMetrics.map((x) => x.unitsSold))} tone="bg-teal-700" />
-            ))
-          ) : (
-            <p className="text-xs text-stone-400">{isBn ? 'কোনো ডেটা নেই' : 'No data'}</p>
-          )}
-        </section>
-      </div>
-
       {/* Live Orders Queue */}
       <div id="dashboard-orders-queue" className="bg-white dark:bg-slate-800 rounded-3xl border border-stone-200/90 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-stone-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-stone-50/50 dark:bg-slate-800/60">
           <div>
             <h2 className="text-lg font-serif font-black text-stone-900 dark:text-slate-100">{isBn ? 'চলমান অর্ডার প্রসেসিং কিউ' : 'Active Orders Queue'}</h2>
-            <p className="text-xs text-stone-500 mt-0.5">{isBn ? 'লাইভ অর্ডার ভেরিফিকেশন, প্যাকিং ও কুরিয়ার হ্যান্ডওভার' : 'Live order processing, verification, and courier dispatch'}</p>
+            <p className="text-xs text-stone-500 dark:text-slate-400 mt-0.5">{isBn ? 'লাইভ অর্ডার ভেরিফিকেশন, প্যাকিং ও কুরিয়ার হ্যান্ডওভার' : 'Live order processing, verification, and courier dispatch'}</p>
           </div>
-          <Link to="/admin/orders" className="text-xs font-bold text-teal-900 hover:text-teal-950 hover:underline inline-flex items-center gap-1">
+          <Link to="/admin/orders" className="text-xs font-bold text-teal-900 dark:text-teal-400 hover:text-teal-950 dark:hover:text-teal-300 hover:underline inline-flex items-center gap-1">
             <span>{isBn ? 'সকল অর্ডার দেখুন' : 'View All Orders'}</span><ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-stone-100/75 dark:bg-slate-800 text-stone-600 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-stone-200 dark:border-slate-700">
+            <thead className="bg-stone-100/75 dark:bg-slate-900/60 text-stone-600 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-stone-200 dark:border-slate-700">
               <tr>
                 <th className="p-4">{isBn ? 'অর্ডার #' : 'Order #'}</th>
                 <th className="p-4">{isBn ? 'গ্রাহক ও ফোন' : 'Customer & Phone'}</th>
@@ -798,35 +803,62 @@ export function Dashboard() {
                 <th className="p-4 text-right">{isBn ? 'কুইক অ্যাকশন' : 'Quick Action'}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-200">
-              {orders.slice(0, 5).map((order) => (
-                <tr key={order.id} className="hover:bg-stone-50/60 transition-colors">
-                  <td className="p-4 font-mono font-bold text-stone-900">{order.orderNumber}</td>
-                  <td className="p-4">
-                    <span className="font-semibold text-stone-900 block">{order.customer.name}</span>
-                    <span className="text-stone-500 font-mono text-[11px]">{order.customer.phone}</span>
-                  </td>
-                  <td className="p-4 text-stone-600">{order.items.length} item(s)</td>
-                  <td className="p-4 font-bold text-stone-900 font-mono">৳ {order.total.toLocaleString()}</td>
-                  <td className="p-4">
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${order.orderStatus === 'DELIVERED' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-teal-50 text-teal-900 border border-teal-200'}`}>{order.orderStatus}</span>
-                  </td>
-                  <td className="p-4 text-right space-x-2">
-                    {order.orderStatus === 'PENDING' && (
-                      <button onClick={() => updateOrderStatus(order.id, 'CONFIRMED', 'Admin manually confirmed order')} className="px-3 py-1 bg-teal-900 text-white rounded-xl font-bold hover:bg-teal-950 transition-colors shadow-2xs">{isBn ? 'কনফার্ম' : 'Confirm'}</button>
-                    )}
-                    {order.orderStatus === 'CONFIRMED' && (
-                      <button onClick={() => updateOrderStatus(order.id, 'PROCESSING', 'Moved to packaging')} className="px-3 py-1 bg-stone-900 text-white rounded-xl font-bold hover:bg-black transition-colors shadow-2xs">{isBn ? 'প্যাক' : 'Pack'}</button>
-                    )}
-                    {order.orderStatus === 'PROCESSING' && (
-                      <button onClick={() => dispatchCourier(order.id, 'Steadfast')} className="px-3 py-1 bg-teal-900 text-white rounded-xl font-bold hover:bg-teal-950 transition-colors shadow-2xs">{isBn ? 'ডিসপ্যাচ' : 'Dispatch'}</button>
-                    )}
-                    {order.orderStatus === 'SHIPPED' && (
-                      <button onClick={() => updateOrderStatus(order.id, 'DELIVERED', 'Courier marked delivery completed')} className="px-3 py-1 bg-emerald-800 text-white rounded-xl font-bold hover:bg-emerald-900 transition-colors shadow-2xs">{isBn ? 'ডেলিভার্ড' : 'Mark Delivered'}</button>
-                    )}
+            <tbody className="divide-y divide-stone-200 dark:divide-slate-700">
+              {orders.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-stone-400 dark:text-slate-500">
+                    {isBn ? 'বর্তমানে কোনো চলমান অর্ডার নেই' : 'No active orders in the queue'}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                orders.slice(0, 5).map((order) => (
+                  <tr key={order.id} className="hover:bg-stone-50/60 dark:hover:bg-slate-700/40 transition-colors">
+                    <td className="p-4 font-mono font-bold text-stone-900 dark:text-slate-100">{order.orderNumber}</td>
+                    <td className="p-4">
+                      <span className="font-semibold text-stone-900 dark:text-slate-100 block">{order.customer.name}</span>
+                      <span className="text-stone-500 dark:text-slate-400 font-mono text-[11px]">{order.customer.phone}</span>
+                    </td>
+                    <td className="p-4 text-stone-600 dark:text-slate-300">{order.items.length} item(s)</td>
+                    <td className="p-4 font-bold text-stone-900 dark:text-slate-100 font-mono">৳ {order.total.toLocaleString()}</td>
+                    <td className="p-4">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                        order.orderStatus === 'DELIVERED'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                          : order.orderStatus === 'CANCELLED'
+                          ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                          : order.orderStatus === 'SHIPPED' || order.orderStatus === 'READY_TO_SHIP'
+                          ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800'
+                          : 'bg-teal-50 dark:bg-teal-950/60 text-teal-900 dark:text-teal-300 border border-teal-200 dark:border-teal-800'
+                      }`}>
+                        {order.orderStatus}
+                      </span>
+                    </td>
+                    <td className="p-4 text-right space-x-2">
+                      {order.orderStatus === 'PENDING' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'CONFIRMED', 'Admin manually confirmed order')} className="px-3 py-1 bg-teal-900 text-white rounded-xl font-bold hover:bg-teal-950 transition-colors shadow-2xs">{isBn ? 'কনফার্ম' : 'Confirm'}</button>
+                      )}
+                      {order.orderStatus === 'CONFIRMED' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'PROCESSING', 'Moved to packaging')} className="px-3 py-1 bg-stone-900 text-white rounded-xl font-bold hover:bg-black transition-colors shadow-2xs">{isBn ? 'প্যাক' : 'Pack'}</button>
+                      )}
+                      {order.orderStatus === 'PROCESSING' && (
+                        <button onClick={() => dispatchCourier(order.id, 'Steadfast')} className="px-3 py-1 bg-teal-900 text-white rounded-xl font-bold hover:bg-teal-950 transition-colors shadow-2xs">{isBn ? 'ডিসপ্যাচ' : 'Dispatch'}</button>
+                      )}
+                      {order.orderStatus === 'READY_TO_SHIP' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'SHIPPED', 'Handed over to courier driver')} className="px-3 py-1 bg-sky-900 text-white rounded-xl font-bold hover:bg-sky-950 transition-colors shadow-2xs">{isBn ? 'হ্যান্ডওভার' : 'Ship'}</button>
+                      )}
+                      {order.orderStatus === 'SHIPPED' && (
+                        <button onClick={() => updateOrderStatus(order.id, 'DELIVERED', 'Courier marked delivery completed')} className="px-3 py-1 bg-emerald-800 text-white rounded-xl font-bold hover:bg-emerald-900 transition-colors shadow-2xs">{isBn ? 'ডেলিভার্ড' : 'Mark Delivered'}</button>
+                      )}
+                      {order.orderStatus === 'DELIVERED' && (
+                        <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">✓ {isBn ? 'সম্পন্ন' : 'Completed'}</span>
+                      )}
+                      {order.orderStatus === 'CANCELLED' && (
+                        <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400">✕ {isBn ? 'বাতিল' : 'Cancelled'}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

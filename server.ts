@@ -4,6 +4,7 @@
  * @license Apache-2.0
  */
 
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -36,6 +37,11 @@ import { attachAuthContext, enforceStaffSurface, requireCustomerSelf, requireSup
 import { issueSessionToken } from './server/sessionTokens';
 import { backupEngine } from './server/backupEngine';
 import { supplierEngine } from './server/supplierEngine';
+import { externalIntegrationsEngine } from './server/externalIntegrationsEngine';
+import { resendEmailService } from './server/resendEmailService';
+import { upstashRedisService } from './server/upstashService';
+import { mongoService } from './server/mongoService';
+import { getServicesHealthReport, checkFirebaseAdminHealth, checkSupabaseHealth } from './lib/services';
 import {
   getPrintSettings,
   savePrintSettings,
@@ -56,13 +62,20 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Phase 20: Security Headers & Hygiene
+  // Phase 20: Security Headers & Hygiene (Configured for public sharing & iframe previews)
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    // Allow public preview & sharing across AI Studio, Cloud Run, and web browsers
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://ai.studio https://*.google.com https://*.run.app;");
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-staff-auth, x-client-ip');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
     next();
   });
 
@@ -134,6 +147,129 @@ async function startServer() {
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development'
     });
+  });
+
+  // -------------------------------------------------------------
+  // Production Integrations & Cloud Infrastructure Endpoints
+  // -------------------------------------------------------------
+  app.get('/api/integrations/status', async (req, res) => {
+    try {
+      const statusOverview = await externalIntegrationsEngine.getAllStatuses();
+      res.json({
+        success: true,
+        data: statusOverview,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Failed to retrieve integration status',
+      });
+    }
+  });
+
+  app.post('/api/integrations/test-email', async (req, res) => {
+    try {
+      const targetEmail = req.body?.email || process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com';
+      const result = await resendEmailService.sendEmail({
+        to: targetEmail,
+        subject: 'কিশলয় লাইভ টেস্ট ইমেইল - Kisholoy Production Engine Verification',
+        html: resendEmailService.buildOrderEmailHtml({
+          orderNumber: `TEST-${Date.now().toString().slice(-6)}`,
+          customerName: 'সম্মানিত অ্যাডমিনিস্ট্রেটর',
+          items: [{ title: 'কিশলয় প্রোডাকশন টেস্ট আইটেম', quantity: 1, price: 1500 }],
+          totalAmount: 1500,
+          shippingAddress: 'ঢাকা, বাংলাদেশ',
+        }),
+        text: `Kisholoy Live System Verification Email sent to ${targetEmail}`,
+      });
+
+      serverDb.addAuditLog(
+        'TEST_EMAIL_DISPATCH',
+        'Integrations',
+        targetEmail,
+        `Dispatched test email via Resend [Provider: ${result.provider}, Status: ${result.success ? 'Success' : 'Failed'}]`
+      );
+
+      res.json({
+        success: result.success,
+        data: result,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message,
+      });
+    }
+  });
+
+  app.post('/api/integrations/redis/ping', async (req, res) => {
+    try {
+      const pingResult = await upstashRedisService.ping();
+      res.json({
+        success: pingResult.status === 'ONLINE',
+        data: pingResult,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/integrations/mongo/health', async (req, res) => {
+    try {
+      const health = await mongoService.healthCheck();
+      res.json({
+        success: health.status === 'CONNECTED',
+        data: health,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/integrations/github/sync', async (req, res) => {
+    try {
+      const githubStatus = await externalIntegrationsEngine.checkGitHub();
+      res.json({
+        success: githubStatus.connected,
+        data: githubStatus,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Unified Database Services (Firebase Admin & Supabase Client)
+  app.get('/api/services/status', async (req, res) => {
+    try {
+      const report = await getServicesHealthReport();
+      res.json({
+        success: true,
+        data: report,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Failed to retrieve database services health',
+      });
+    }
+  });
+
+  app.post('/api/services/firebase/verify', async (req, res) => {
+    try {
+      const health = await checkFirebaseAdminHealth();
+      res.json({ success: health.connected, data: health });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/services/supabase/verify', async (req, res) => {
+    try {
+      const health = await checkSupabaseHealth();
+      res.json({ success: health.connected, data: health });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   // -------------------------------------------------------------

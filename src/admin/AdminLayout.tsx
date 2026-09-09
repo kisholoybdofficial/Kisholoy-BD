@@ -19,6 +19,8 @@ import { ScannerModal } from '../components/scan/ScannerModal';
 import { LanguageButton } from '../components/layout/LanguageButton';
 import { ThemeButton } from '../components/layout/ThemeButton';
 import { AdminErrorBoundary } from '../components/admin/AdminErrorBoundary';
+import { useAdminTactileFeedback } from '../hooks/useAdminTactileFeedback';
+import { AdminTactileProvider } from '../context/AdminTactileContext';
 
 /**
  * Unified route monitoring hook that logs and validates active admin sub-menu navigation
@@ -167,7 +169,18 @@ const ROUTE_PERMISSIONS: Record<string, { requiredPermission: string; allowedRol
 };
 
 export function AdminLayout() {
-  const { currentRole, setCurrentRole, orders, products, language, setLanguage, siteContent, showToast } = useApp();
+  return (
+    <AdminTactileProvider>
+      <AdminLayoutContent />
+    </AdminTactileProvider>
+  );
+}
+
+function AdminLayoutContent() {
+  // Activate mobile touch ripple & tactile scale feedback for all interactive elements in admin
+  useAdminTactileFeedback('admin-root-layout');
+
+  const { currentRole, setCurrentRole, orders, products, returnRequests, language, setLanguage, siteContent, showToast } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [guideModalOpen, setGuideModalOpen] = useState(false);
   const [guideInitialSection, setGuideInitialSection] = useState<string>('all');
@@ -225,13 +238,15 @@ export function AdminLayout() {
   };
 
   const pendingOrdersCount = orders.filter(o => o.orderStatus === 'PENDING').length;
-  const lowStockCount = products.filter(p => p.stock <= 5).length;
+  const lowStockCount = products.filter(p => p.stock <= (p.lowStockThreshold ?? 5)).length;
   const highRiskCount = orders.filter(o => o.fraudRisk && (o.fraudRisk.riskScore >= 60 || o.fraudRisk.riskRating === 'HIGH' || o.fraudRisk.riskRating === 'SUSPICIOUS')).length;
+  const pendingReturnsCount = (returnRequests || []).filter(r => r.status === 'UNDER_REVIEW').length;
 
   const counts = {
     pendingOrders: pendingOrdersCount,
     lowStock: lowStockCount,
-    fraudAlerts: highRiskCount
+    fraudAlerts: highRiskCount,
+    pendingReturns: pendingReturnsCount
   };
 
   const isBn = language === 'BN';
@@ -278,44 +293,44 @@ export function AdminLayout() {
           <button
             id="admin-sidebar-toggle-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="lg:hidden p-2 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white rounded-xl hover:bg-stone-100 dark:hover:bg-stone-800/80 transition-colors"
+            className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white rounded-xl hover:bg-stone-100 dark:hover:bg-stone-800/80 transition-colors"
             aria-label="Toggle navigation menu"
           >
             {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
 
-          <Link to="/admin" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-teal-700 to-teal-950 flex items-center justify-center font-serif font-black text-white text-base shadow-xs border border-teal-600/40">
+          <Link to="/admin" className="flex items-center gap-2 sm:gap-2.5 shrink-0 min-h-[44px]">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-teal-700 to-teal-950 flex items-center justify-center font-serif font-black text-white text-base shadow-xs border border-teal-600/40 shrink-0">
               K
             </div>
-            <span className="font-serif font-black text-lg sm:text-xl tracking-tight text-stone-900 dark:text-white">
+            <span className="font-serif font-black text-base sm:text-xl tracking-tight text-stone-900 dark:text-white whitespace-nowrap">
               {siteContent.brandName}
             </span>
-            <span className="text-teal-800 dark:text-teal-300 font-mono text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-teal-50 dark:bg-teal-950 border border-teal-200 dark:border-teal-800/80 uppercase tracking-wider hidden sm:inline-block">
+            <span className="text-teal-800 dark:text-teal-300 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-50 dark:bg-teal-950 border border-teal-200 dark:border-teal-800/80 uppercase tracking-wider hidden md:inline-block">
               {isBn ? 'অপারেশনস কন্ট্রোল' : 'OPS CENTER'}
             </span>
           </Link>
         </div>
 
         {/* Topbar Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           
           {/* Who Am I? Identity Inspector Trigger */}
           <button
             onClick={() => setInspectorOpen(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-850 text-stone-800 dark:text-stone-200 hover:text-stone-900 dark:hover:text-white border border-stone-200 dark:border-stone-800 text-xs font-semibold shadow-2xs transition-all"
+            className="flex min-h-[44px] items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-850 text-stone-800 dark:text-stone-200 hover:text-stone-900 dark:hover:text-white border border-stone-200 dark:border-stone-800 text-xs font-semibold shadow-2xs transition-all max-w-[120px] sm:max-w-none"
             title="Inspect your operational access and role permissions"
           >
-            <ShieldCheck className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-            <span className="font-mono text-teal-800 dark:text-teal-300 font-bold">
+            <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
+            <span className="font-mono text-teal-800 dark:text-teal-300 font-bold truncate">
               {isBn ? (ROLE_LABELS_BN[currentRole] || currentRole) : currentRole}
             </span>
             <span className="hidden xl:inline text-stone-500 dark:text-stone-400 font-normal">| {isBn ? 'অ্যাক্সেস রুলস' : 'Permissions'}</span>
           </button>
 
           {/* Quick Role Persona Switcher */}
-          <div className="hidden sm:flex items-center gap-2 bg-stone-100 dark:bg-stone-900 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-stone-800">
-            <UserCheck className="w-3.5 h-3.5 text-stone-500 dark:text-stone-400" />
+          <div className="hidden sm:flex min-h-[44px] items-center gap-2 bg-stone-100 dark:bg-stone-900 px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-800">
+            <UserCheck className="w-4 h-4 text-stone-500 dark:text-stone-400" />
             <select
               id="admin-role-selector"
               value={currentRole}
@@ -341,10 +356,10 @@ export function AdminLayout() {
           <button
             id="admin-open-scanner-btn"
             onClick={() => setScannerOpen(true)}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-stone-900 hover:bg-stone-850 text-stone-200 border border-stone-800 text-xs font-semibold shadow-2xs hover:text-white transition-all"
+            className="hidden sm:inline-flex min-h-[44px] items-center gap-1.5 px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-850 text-stone-200 border border-stone-800 text-xs font-semibold shadow-2xs hover:text-white transition-all"
             title={isBn ? 'অর্ডার/ট্র্যাকিং/SKU স্ক্যান করুন' : 'Scan an order, tracking ID or SKU'}
           >
-            <ScanLine className="w-3.5 h-3.5 text-teal-400" />
+            <ScanLine className="w-4 h-4 text-teal-400" />
             <span>{isBn ? 'স্ক্যান' : 'Scan'}</span>
           </button>
 
@@ -352,10 +367,10 @@ export function AdminLayout() {
           <button
             id="admin-open-work-guide-btn"
             onClick={() => handleOpenGuide('all')}
-            className="hidden md:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-850 text-stone-800 dark:text-stone-200 border border-stone-200 dark:border-stone-800 text-xs font-semibold shadow-2xs hover:text-stone-900 dark:hover:text-white transition-all"
+            className="hidden md:inline-flex min-h-[44px] items-center gap-1.5 px-3.5 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-850 text-stone-800 dark:text-stone-200 border border-stone-200 dark:border-stone-800 text-xs font-semibold shadow-2xs hover:text-stone-900 dark:hover:text-white transition-all"
             title={isBn ? 'সকল সেকশন ও কাজের বিবরণী দেখুন' : 'View all sections and work details'}
           >
-            <BookOpen className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+            <BookOpen className="w-4 h-4 text-teal-600 dark:text-teal-400" />
             <span>{isBn ? 'কাজের গাইড' : 'Work Guide'}</span>
           </button>
 
@@ -372,7 +387,7 @@ export function AdminLayout() {
             id="admin-live-store-link"
             to="/"
             target="_blank"
-            className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-teal-800 hover:bg-teal-750 text-white text-xs font-semibold shadow-xs transition-colors"
+            className="hidden sm:inline-flex min-h-[44px] items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-800 hover:bg-teal-750 text-white text-xs font-semibold shadow-xs transition-colors"
           >
             <span>{isBn ? 'লাইভ ওয়েবসাইট' : 'Live Store'}</span>
             <ExternalLink className="w-3.5 h-3.5" />
@@ -424,20 +439,20 @@ export function AdminLayout() {
           {/* Quick Search & Expand/Collapse Toolbar */}
           <div className="p-3 border-b border-stone-200 dark:border-stone-850 space-y-2 bg-white dark:bg-stone-950">
             <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 type="text"
                 value={menuSearch}
                 onChange={(e) => setMenuSearch(e.target.value)}
                 placeholder={isBn ? 'সাব-মেনু খুঁজুন...' : 'Search menu modules...'}
-                className="w-full pl-8 pr-7 py-1.5 bg-stone-100 dark:bg-stone-900 rounded-xl text-xs text-stone-800 dark:text-stone-200 placeholder:text-stone-400 border border-stone-200 dark:border-stone-800 focus:outline-none focus:border-teal-500 transition-all font-medium"
+                className="w-full min-h-[44px] pl-9 pr-9 py-2 bg-stone-100 dark:bg-stone-900 rounded-xl text-xs text-stone-800 dark:text-stone-200 placeholder:text-stone-400 border border-stone-200 dark:border-stone-800 focus:outline-none focus:border-teal-500 transition-all font-medium"
               />
               {menuSearch && (
                 <button
                   onClick={() => setMenuSearch('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-0.5"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-1"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
@@ -446,17 +461,17 @@ export function AdminLayout() {
               <span className="font-semibold uppercase tracking-wider text-[10px] text-stone-400 dark:text-stone-500">
                 {isBn ? 'মেনু বিভাগ' : 'Sections'}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={handleExpandAll}
-                  className="hover:text-teal-700 dark:hover:text-teal-400 transition-colors font-semibold cursor-pointer text-[10px]"
+                  className="hover:text-teal-700 dark:hover:text-teal-400 transition-colors font-semibold cursor-pointer text-[11px] min-h-[36px] px-2 py-1 inline-flex items-center"
                 >
                   {isBn ? 'সব খুলুন' : 'Expand All'}
                 </button>
                 <span>•</span>
                 <button
                   onClick={handleCollapseAll}
-                  className="hover:text-teal-700 dark:hover:text-teal-400 transition-colors font-semibold cursor-pointer text-[10px]"
+                  className="hover:text-teal-700 dark:hover:text-teal-400 transition-colors font-semibold cursor-pointer text-[11px] min-h-[36px] px-2 py-1 inline-flex items-center"
                 >
                   {isBn ? 'সব বন্ধ' : 'Collapse All'}
                 </button>
@@ -494,7 +509,7 @@ export function AdminLayout() {
                   {/* Group Header (accordion) */}
                   <button
                     onClick={() => toggleSection(section.id)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl transition-all text-left group ${
+                    className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all text-left group ${
                       isOpen
                         ? 'bg-stone-100/90 dark:bg-stone-900/90 text-stone-900 dark:text-white font-bold'
                         : 'text-stone-600 dark:text-stone-400 hover:bg-stone-100/70 dark:hover:bg-stone-900/70 hover:text-stone-900 dark:hover:text-stone-200'
@@ -523,7 +538,9 @@ export function AdminLayout() {
                     <div className="mt-1 ml-3.5 pl-2.5 border-l-2 border-stone-200 dark:border-stone-800/90 space-y-0.5 py-0.5">
                       {allowedItems.map((item) => {
                         const Icon = item.icon;
-                        const isActive = location.pathname === item.path || (item.path !== '/admin' && location.pathname.startsWith(item.path));
+                        const currentPath = location.pathname.replace(/\/$/, '') || '/';
+                        const itemPath = item.path.replace(/\/$/, '') || '/';
+                        const isActive = currentPath === itemPath || (itemPath !== '/admin' && currentPath.startsWith(itemPath));
                         const badge = getSectionBadgeCount(item.badgeKey, counts);
 
                         return (
@@ -531,8 +548,9 @@ export function AdminLayout() {
                             key={item.path}
                             id={item.id}
                             to={item.path}
+                            title={isBn ? item.labelBn : item.label}
                             onClick={() => setSidebarOpen(false)}
-                            className={`relative flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-all group ${
+                            className={`relative min-h-[44px] flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-all group ${
                               isActive
                                 ? 'bg-teal-50/90 dark:bg-teal-950/70 text-teal-950 dark:text-teal-100 font-bold shadow-2xs border border-teal-200/80 dark:border-teal-800/80'
                                 : 'text-stone-600 dark:text-stone-400 hover:bg-stone-100/90 dark:hover:bg-stone-900/90 hover:text-stone-900 dark:hover:text-stone-100 font-medium'

@@ -155,7 +155,7 @@ export function BackupAdmin({ initialTab }: BackupAdminProps = {}) {
   const [syncingDrive, setSyncingDrive] = useState(false);
   const [connectingDrive, setConnectingDrive] = useState(false);
   const [restoringFromDrive, setRestoringFromDrive] = useState<string | null>(null);
-  const [connectEmailInput, setConnectEmailInput] = useState('mdmuntasirshihab@gmail.com');
+  const [connectEmailInput, setConnectEmailInput] = useState('kisholoybd.official@gmail.com');
   const [connectFolderInput, setConnectFolderInput] = useState('KISHOLOY-Backups');
 
   // Initial Data Fetch
@@ -1220,7 +1220,7 @@ export function BackupAdmin({ initialTab }: BackupAdminProps = {}) {
                     value={connectEmailInput}
                     onChange={(e) => setConnectEmailInput(e.target.value)}
                     disabled={driveConfig?.connected}
-                    placeholder="e.g. mdmuntasirshihab@gmail.com"
+                    placeholder="e.g. kisholoybd.official@gmail.com"
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-xs focus:ring-1 focus:ring-teal-900 bg-stone-50/50 disabled:bg-stone-100 disabled:text-stone-600"
                   />
                 </div>

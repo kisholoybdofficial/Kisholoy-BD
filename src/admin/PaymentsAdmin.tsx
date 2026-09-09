@@ -165,12 +165,12 @@ export function PaymentsAdmin() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto pb-12 w-full min-w-0 overflow-x-hidden">
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 bg-white dark:bg-stone-900 p-4 sm:p-6 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
         <div>
-          <h1 className="text-2xl font-serif font-bold text-stone-900">{isBn ? 'পেমেন্ট ও গেটওয়ে সেটেলমেন্ট' : 'Payments & Gateway Settlements'}</h1>
-          <p className="text-xs text-stone-500">
+          <h1 className="text-xl sm:text-2xl font-serif font-bold text-stone-900 dark:text-white">{isBn ? 'পেমেন্ট ও গেটওয়ে সেটেলমেন্ট' : 'Payments & Gateway Settlements'}</h1>
+          <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
             Authoritative financial ledger, SSLCOMMERZ & bKash integrations, IPN verification webhooks, and fraud risk sentinel.
           </p>
         </div>
@@ -178,7 +178,7 @@ export function PaymentsAdmin() {
         <button
           onClick={fetchTransactions}
           disabled={isLoadingTx}
-          className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs font-semibold text-stone-700 hover:bg-stone-50 shadow-xs"
+          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-750 border border-stone-200 dark:border-stone-700 rounded-xl text-xs font-semibold text-stone-700 dark:text-stone-300 shadow-xs transition-colors shrink-0"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTx ? 'animate-spin' : ''}`} />
           <span>{isBn ? 'লেনদেন সিঙ্ক করুন' : 'Sync Transactions'}</span>
@@ -186,46 +186,46 @@ export function PaymentsAdmin() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'মোট নিষ্পত্তি' : 'Gross Settled'}</span>
-            <DollarSign className="w-4 h-4 text-emerald-600" />
+            <span className="text-[10px] sm:text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'মোট নিষ্পত্তি' : 'Gross Settled'}</span>
+            <DollarSign className="w-4 h-4 text-emerald-600 shrink-0" />
           </div>
-          <span className="text-2xl font-bold font-mono text-emerald-800 block mt-2">৳ {totalSettled.toLocaleString()}</span>
-          <span className="text-[11px] text-stone-500 block mt-1">{isBn ? 'ব্যাংক/গেটওয়ে ট্রান্সফারে যাচাইকৃত' : 'Verified via bank/gateway transfer'}</span>
+          <span className="text-lg sm:text-2xl font-bold font-mono text-emerald-800 dark:text-emerald-400 block mt-1.5 truncate">৳ {totalSettled.toLocaleString()}</span>
+          <span className="text-[10px] sm:text-[11px] text-stone-500 dark:text-stone-400 block mt-1 truncate">{isBn ? 'ব্যাংক/গেটওয়ে ট্রান্সফারে যাচাইকৃত' : 'Verified via bank transfer'}</span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+        <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'বকেয়া ক্যাশ অন ডেলিভারি' : 'Pending COD'}</span>
-            <Clock className="w-4 h-4 text-amber-600" />
+            <span className="text-[10px] sm:text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'বকেয়া ক্যাশ' : 'Pending COD'}</span>
+            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
           </div>
-          <span className="text-2xl font-bold font-mono text-amber-800 block mt-2">৳ {pendingCod.toLocaleString()}</span>
-          <span className="text-[11px] text-stone-500 block mt-1">{isBn ? 'স্টেডফাস্ট / পাঠাও এজেন্টের কাছে জমা' : 'Held by Steadfast / Pathao agents'}</span>
+          <span className="text-lg sm:text-2xl font-bold font-mono text-amber-800 dark:text-amber-400 block mt-1.5 truncate">৳ {pendingCod.toLocaleString()}</span>
+          <span className="text-[10px] sm:text-[11px] text-stone-500 dark:text-stone-400 block mt-1 truncate">{isBn ? 'কুরিয়ার এজেন্টের কাছে জমা' : 'Held by courier agents'}</span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+        <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'গেটওয়ে ফি' : 'Gateway Fees'}</span>
-            <TrendingDown className="w-4 h-4 text-rose-600" />
+            <span className="text-[10px] sm:text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'গেটওয়ে ফি' : 'Gateway Fees'}</span>
+            <TrendingDown className="w-4 h-4 text-rose-600 shrink-0" />
           </div>
-          <span className="text-2xl font-bold font-mono text-rose-800 block mt-2">৳ {totalGatewayFees.toLocaleString()}</span>
-          <span className="text-[11px] text-stone-500 block mt-1">SSL (2.5%) & bKash (1.5%)</span>
+          <span className="text-lg sm:text-2xl font-bold font-mono text-rose-800 dark:text-rose-400 block mt-1.5 truncate">৳ {totalGatewayFees.toLocaleString()}</span>
+          <span className="text-[10px] sm:text-[11px] text-stone-500 dark:text-stone-400 block mt-1 truncate">SSL (2.5%) & bKash (1.5%)</span>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-stone-200 shadow-xs">
+        <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'নিট প্রদান' : 'Net Disbursed'}</span>
-            <Wallet className="w-4 h-4 text-teal-600" />
+            <span className="text-[10px] sm:text-xs font-bold text-stone-400 uppercase tracking-wider">{isBn ? 'নিট প্রদান' : 'Net Disbursed'}</span>
+            <Wallet className="w-4 h-4 text-teal-600 shrink-0" />
           </div>
-          <span className="text-2xl font-bold font-mono text-teal-900 block mt-2">৳ {totalNetDisbursed.toLocaleString()}</span>
-          <span className="text-[11px] text-emerald-700 font-semibold block mt-1">✓ Credited to Merchant Account</span>
+          <span className="text-lg sm:text-2xl font-bold font-mono text-teal-900 dark:text-teal-400 block mt-1.5 truncate">৳ {totalNetDisbursed.toLocaleString()}</span>
+          <span className="text-[10px] sm:text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold block mt-1 truncate">✓ Credited to Merchant</span>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-stone-200 gap-2 sm:gap-4 overflow-x-auto text-xs font-semibold">
+      <div className="flex border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 rounded-t-xl px-2 sm:px-4 pt-2 gap-1 sm:gap-2 overflow-x-auto scrollbar-none w-full min-w-0 text-xs font-semibold">
         {[
           { id: 'ledger', label: 'Transactions Ledger', count: transactions.length },
           { id: 'settlement', label: 'Reconciliation & Payouts' },
@@ -236,15 +236,15 @@ export function PaymentsAdmin() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`pb-3 px-2 border-b-2 whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+            className={`py-2.5 px-3 border-b-2 whitespace-nowrap transition-colors flex items-center gap-1.5 shrink-0 ${
               activeTab === tab.id
-                ? 'border-teal-800 text-teal-900 font-bold'
-                : 'border-transparent text-stone-500 hover:text-stone-800'
+                ? 'border-teal-800 text-teal-900 dark:text-teal-300 font-bold bg-stone-50/50 dark:bg-stone-800/50'
+                : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
             }`}
           >
             <span>{tab.label}</span>
             {tab.count !== undefined && (
-              <span className="bg-stone-100 text-stone-700 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+              <span className="bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                 {tab.count}
               </span>
             )}

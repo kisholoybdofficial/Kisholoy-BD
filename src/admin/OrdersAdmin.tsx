@@ -11,6 +11,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, OrderSourceChannel } from '../types';
 import { PrintOrderDocumentsModal } from '../components/print/PrintOrderDocumentsModal';
+import { PrintPreviewModal } from '../components/print/PrintPreviewModal';
 import { BulkPrintModal } from '../components/print/BulkPrintModal';
 import { DateRangeFilterBar } from '../components/admin/DateRangeFilterBar';
 import { DateWiseDataHubModal } from '../components/admin/DateWiseDataHubModal';
@@ -271,7 +272,7 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
               setManualOrderInitialChannel('WHATSAPP');
               setShowManualOrderModal(true);
             }}
-            className="flex-1 sm:flex-initial px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all"
+            className="flex-1 sm:flex-initial min-h-[44px] px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all"
           >
             <Plus className="w-4 h-4" />
             <MessageCircle className="w-4 h-4 text-emerald-200" />
@@ -280,14 +281,14 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
 
           <button
             onClick={() => setShowDataHub(true)}
-            className="px-3.5 py-2 bg-stone-900 hover:bg-stone-950 text-teal-300 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all border border-stone-800"
+            className="min-h-[44px] px-4 py-2.5 bg-stone-900 hover:bg-stone-950 text-teal-300 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all border border-stone-800"
           >
             <Sparkles className="w-4 h-4 text-teal-400" />
             <span>{isBn ? 'মাস্টার ডেট হাব' : 'Date Hub'}</span>
           </button>
           <button
             onClick={() => setShowBulkPrint(true)}
-            className="px-3.5 py-2 bg-teal-900 hover:bg-teal-950 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all"
+            className="min-h-[44px] px-4 py-2.5 bg-teal-900 hover:bg-teal-950 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all"
           >
             <Printer className="w-4 h-4 text-teal-300" />
             <span>{isBn ? 'বাল্ক প্রিন্ট' : 'Bulk Print'}</span>
@@ -310,13 +311,13 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
       <div className="bg-white dark:bg-stone-900 p-3.5 sm:p-4 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-3 w-full min-w-0">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4">
           <div className="relative w-full lg:w-80">
-            <Search className="w-4 h-4 text-stone-400 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
             <input
               type="text"
               placeholder={isBn ? 'অর্ডার #, নাম, ফোন বা এজেন্ট দিয়ে খুঁজুন...' : 'Search by order #, name, phone...'}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full text-xs pl-9 pr-3 py-2 border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-850 rounded-lg focus:outline-none focus:border-teal-800 text-stone-900 dark:text-stone-100"
+              className="w-full min-h-[44px] text-xs pl-9 pr-3 py-2.5 border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-850 rounded-xl focus:outline-none focus:border-teal-800 text-stone-900 dark:text-stone-100"
             />
           </div>
 
@@ -327,7 +328,7 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
-                className={`px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap transition-colors shrink-0 text-xs ${
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl font-semibold whitespace-nowrap transition-colors shrink-0 text-xs flex items-center ${
                   statusFilter === st
                     ? 'bg-teal-900 text-white shadow-xs'
                     : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700'
@@ -359,7 +360,7 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
               <button
                 key={ch.id}
                 onClick={() => setChannelFilter(ch.id)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-all border shrink-0 ${
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-all border shrink-0 ${
                   isSelected
                     ? 'bg-stone-900 text-white border-stone-900 shadow-xs'
                     : 'bg-stone-50 dark:bg-stone-800 text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-750'
@@ -465,13 +466,13 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
                       <button
                         type="button"
                         onClick={(e) => handleToggleOrderSelect(order.id, e)}
-                        className="p-1 text-stone-400 hover:text-teal-800 dark:hover:text-teal-300"
+                        className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 text-stone-400 hover:text-teal-800 dark:hover:text-teal-300"
                         aria-label={`Select order ${order.orderNumber}`}
                       >
                         {isSelected ? (
-                          <CheckSquare className="w-4 h-4 text-teal-800 dark:text-teal-400" />
+                          <CheckSquare className="w-5 h-5 text-teal-800 dark:text-teal-400" />
                         ) : (
-                          <Square className="w-4 h-4 text-stone-400" />
+                          <Square className="w-5 h-5 text-stone-400" />
                         )}
                       </button>
                       <div>
@@ -535,7 +536,7 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
                       <select
                         value={order.orderStatus}
                         onChange={(e) => handleSingleStatusChange(order, e.target.value as OrderStatus)}
-                        className="bg-teal-50 dark:bg-teal-950 border border-teal-200 dark:border-teal-800 text-teal-900 dark:text-teal-200 font-bold px-2 py-1 rounded text-xs focus:outline-none"
+                        className="min-h-[44px] bg-teal-50 dark:bg-teal-950 border border-teal-200 dark:border-teal-800 text-teal-900 dark:text-teal-200 font-bold px-3 py-2 rounded-xl text-xs focus:outline-none"
                       >
                         {allStatuses.map((s) => (
                           <option key={s} value={s} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-white">
@@ -547,15 +548,15 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
                       {risk && (
                         <Link
                           to={`/admin/fraud?search=${encodeURIComponent(order.orderNumber)}`}
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          className={`inline-flex items-center min-h-[44px] gap-1 px-2.5 py-1.5 rounded-xl text-[10px] font-bold ${
                             risk.riskRating === 'SUSPICIOUS' ? 'bg-rose-100 text-rose-800 border border-rose-200' :
                             risk.riskRating === 'HIGH' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
                             risk.riskRating === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                           }`}
                         >
-                          {risk.riskRating === 'SUSPICIOUS' ? <AlertCircle className="w-3 h-3 text-rose-600" /> :
-                           risk.riskRating === 'HIGH' ? <ShieldAlert className="w-3 h-3 text-amber-600" /> :
-                           <ShieldCheck className="w-3 h-3 text-emerald-600" />}
+                          {risk.riskRating === 'SUSPICIOUS' ? <AlertCircle className="w-3.5 h-3.5 text-rose-600" /> :
+                           risk.riskRating === 'HIGH' ? <ShieldAlert className="w-3.5 h-3.5 text-amber-600" /> :
+                           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />}
                           <span>{risk.riskRating} ({risk.riskScore})</span>
                         </Link>
                       )}
@@ -564,43 +565,43 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
                     {order.courier?.trackingId ? (
                       <button
                         onClick={() => setCourierDispatchOrder(order)}
-                        className="text-[11px] text-teal-800 dark:text-teal-300 font-bold flex items-center gap-1 font-mono hover:underline"
+                        className="min-h-[44px] px-2.5 py-1.5 text-xs text-teal-800 dark:text-teal-300 font-bold flex items-center gap-1.5 font-mono hover:underline"
                       >
-                        <Truck className="w-3 h-3" />
+                        <Truck className="w-3.5 h-3.5" />
                         <span>{order.courier.provider} • {order.courier.trackingId}</span>
                       </button>
                     ) : (
                       <button
                         onClick={() => setCourierDispatchOrder(order)}
-                        className="px-2 py-0.5 bg-teal-50 dark:bg-teal-950 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded font-bold text-[10px] flex items-center gap-1"
+                        className="min-h-[44px] px-3 py-2 bg-teal-50 dark:bg-teal-950 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-xl font-bold text-xs flex items-center gap-1.5"
                       >
-                        <Truck className="w-3 h-3" />
+                        <Truck className="w-3.5 h-3.5" />
                         <span>+ {isBn ? 'কুরিয়ার' : 'Courier'}</span>
                       </button>
                     )}
                   </div>
 
                   {/* Actions Bar */}
-                  <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-stone-100 dark:border-stone-800">
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-100 dark:border-stone-800 flex-wrap">
                     <button
                       onClick={() => openWhatsAppForOrder(order)}
                       title="Send via WhatsApp"
-                      className="p-2 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-1"
+                      className="min-h-[44px] px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-1.5"
                     >
-                      <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-[11px]">WhatsApp</span>
+                      <MessageCircle className="w-4 h-4 text-emerald-600" />
+                      <span className="text-xs">WhatsApp</span>
                     </button>
                     <button
                       onClick={() => setPrintOrder(order)}
                       title="Print Order Documents"
-                      className="p-2 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-lg text-xs font-semibold flex items-center gap-1"
+                      className="min-h-[44px] px-3.5 py-2 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950 text-teal-900 dark:text-teal-200 border border-teal-200 dark:border-teal-800 rounded-xl text-xs font-semibold flex items-center gap-1.5"
                     >
-                      <Printer className="w-3.5 h-3.5 text-teal-700" />
-                      <span className="text-[11px]">Print</span>
+                      <Printer className="w-4 h-4 text-teal-700" />
+                      <span className="text-xs">Print</span>
                     </button>
                     <button
                       onClick={() => setSelectedOrder(order)}
-                      className="px-3 py-2 bg-stone-900 hover:bg-black text-white rounded-lg font-semibold text-xs transition-colors"
+                      className="min-h-[44px] px-4 py-2 bg-stone-900 hover:bg-black text-white rounded-xl font-semibold text-xs transition-colors flex items-center"
                     >
                       {isBn ? 'বিস্তারিত' : 'Details'}
                     </button>
@@ -1160,11 +1161,12 @@ ${advancePaid > 0 ? `✅ *অগ্রিম পরিশোধ:* ৳${advancePa
         />
       )}
 
-      {/* Unified Single-Order Print Documents Modal */}
+      {/* Standardized Single-Order Print Preview Modal (Invoice & Packing Slip) */}
       {printOrder && (
-        <PrintOrderDocumentsModal
+        <PrintPreviewModal
           order={printOrder}
           siteContent={siteContent}
+          initialDocType="INVOICE"
           onClose={() => setPrintOrder(null)}
         />
       )}
