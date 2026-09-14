@@ -329,17 +329,48 @@ Not hidden on purpose — see also the PR description.
 - Real gateway credentials (SSLCommerz/bKash sandbox) are not available here, so
   IPN *verification* was proven with signature checks and fake-gateway harnesses
   rather than against the live sandbox (**NOT VERIFIED** end-to-end).
-- Static analysis: CodeQL reports 24 alerts on this branch and the PR gate turns
-  red on them. Eight were real and are fixed in the `fix(security)` follow-up
-  commit (rate-limit key taken from `x-forwarded-for`, `Math.random()` webhook
-  secrets, SHA-1 change digests, stack-shaped error details, an incomplete HTML
-  "sanitizer" in the spreadsheet reader, unschemad image `src`, an unbounded email
-  pattern, and a `*.e2b.app` CORS allowance that leaked into production). The
-  remaining sixteen are "Missing rate limiting" on routes that *are* covered by
-  the tiered `server/http/rateLimit.ts` middleware mounted app-wide — CodeQL's
-  model does not see a custom limiter, so the alerts are informational. Either
-  dismiss them in Security → Code scanning with that reason, or add
-  `x-codeql` suppression comments; do not "fix" them by wrapping handlers again.
+- Static analysis: CodeQL reported 24 alerts on this branch and the PR gate turns
+  red on them. **Twelve were real and are fixed** in the two `fix(security)`
+  follow-up commits: the rate-limit key taken from attacker-controlled
+  `x-forwarded-for` (which silently disabled the login brute-force defence),
+  `Math.random()` webhook signing secrets, a `*.e2b.app` CORS allowance that
+  leaked into production, SHA-1 change digests, `err.details` forwarded to
+  clients, `err.message` exposed whenever `!isProduction` (a dev server binds
+  0.0.0.0 and is network-reachable in preview environments), a polynomial
+  regex used to *detect* stacks, the incomplete HTML "sanitizer" in the
+  spreadsheet reader, an unschemad `<img src>`, an unbounded email pattern, and
+  an attacker-controlled `Host` header written into 46 sitemap URLs.
+
+  The remaining nineteen are **not** suppressed, so the list keeps showing what
+  was actually reviewed:
+
+  * 15 × "Missing rate limiting" — every one of those routes *is* limited by the
+    tiered `server/http/rateLimit.ts` middleware mounted app-wide (AUTH 12/15 min
+    plus a per-identifier bucket). CodeQL's model only recognises
+    `express-rate-limit`-shaped middleware, so the alerts are informational.
+    Dismiss them with that reason; do not "fix" them by double-wrapping handlers.
+  * `server/persistence/store.ts` "password hash with insufficient computational
+    effort" — `changeDigest()` is a sync-eligibility digest, not password
+    hashing. Credential columns must stay inside the digest or a password write
+    would never be persisted; the algorithm itself is already SHA-256.
+  * `server/http/errors.ts` "information exposure through a stack trace" — the
+    flagged sink is the generic responder, whose message is a constant bilingual
+    fallback unless `KISHOLOY_TESTS=1`; `details` pass a key/shape denylist and
+    stack-shaped strings are dropped before anything is written. The query is
+    syntactic and cannot see those guards.
+  * `server/http/headers.ts` "CORS misconfiguration for credentials transfer" —
+    the reflected origin must pass `isAllowedOrigin`, which in production accepts
+    only the exact `KISHOLOY_CORS_ORIGINS` entries (localhost/preview allowances
+    are gated off). No wildcard is ever emitted with credentials.
+  * `src/components/ProductImage.tsx` "DOM text reinterpreted as HTML" —
+    `displayableSrc()` restricts the value to root-relative, `http(s)` and
+    `data:image/…`, and React assigns `src` as a DOM property rather than parsing
+    markup, so `javascript:` cannot ride an image field.
+
+  If the team prefers a green gate over a visible list, add
+  `// codeql[<query-id>]: ignore` above each site — only after someone agrees
+  with the paragraph above, because a suppression is exactly as trustworthy as
+  the review behind it.
 - The SonarCloud `Analysis` check fails on `main` as well as on PRs (no
   `SONAR_TOKEN` secret in the repository). It is not a signal about your change.
 - Product imagery: the catalogue ships with locally generated art plus a
