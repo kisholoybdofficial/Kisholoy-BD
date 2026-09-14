@@ -99,17 +99,19 @@ class PersistenceStore {
         }
       } catch (err) {
         const message = (err as Error).message;
-        // A misconfigured Atlas URI must not take the whole storefront down:
-        // degrade to the volatile store, but say so loudly and in health.
-        if (this._mode !== 'memory') {
-          log.error('persistence', `driver init failed (${message}) — falling back to volatile memory store`, err);
+        log.error('persistence', `driver init failed (${message}) — falling back to local file/memory store`, err);
+        try {
+          const driver = new FileDriver();
+          await driver.init();
+          this.driver = driver;
+          this._mode = 'file';
+          this.bootError = `Primary datastore unavailable: ${message} (using local file storage)`;
+        } catch {
           const driver = new MemoryDriver();
           await driver.init();
           this.driver = driver;
           this._mode = 'memory';
           this.bootError = `Durable store unavailable: ${message}`;
-        } else {
-          throw err;
         }
       }
 

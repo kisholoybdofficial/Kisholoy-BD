@@ -3,15 +3,17 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm ci --omit=dev || npm install",
+  "installCommand": "npm install",
   "functions": {
     "api/index.js": {
       "runtime": "nodejs22.x",
       "memory": 1024,
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "api/server.bundle.cjs"
     }
   },
   "rewrites": [
+    { "source": "/api", "destination": "/api/index" },
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],

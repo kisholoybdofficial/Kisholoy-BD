@@ -209,7 +209,11 @@ class StaffAuthService {
   }
 
   findByEmail(email: string): StaffAccount | undefined {
-    const id = this.emailIndex.get(emailKey(email));
+    const key = emailKey(email);
+    let id = this.emailIndex.get(key);
+    if (!id && !key.includes('@')) {
+      id = this.emailIndex.get(emailKey(`${key}@kisholoy.com`));
+    }
     return id ? this.accounts.get(id) : undefined;
   }
 

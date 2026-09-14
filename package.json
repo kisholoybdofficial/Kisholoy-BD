@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && npm run build:server",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=api/server.bundle.cjs",
     "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=api/server.bundle.cjs && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs",
     "build:local": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs",
-    "start": "NODE_ENV=production node dist/server.cjs",
+    "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist api/server.bundle.cjs",
     "lint": "tsc --noEmit",

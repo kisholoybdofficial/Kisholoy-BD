@@ -5470,7 +5470,7 @@ export default vercelHandler;
 async function startServer(): Promise<void> {
   const devMode = process.env.NODE_ENV !== 'production';
   const app = await createApp({ apiOnly: false, devVite: devMode });
-  const PORT = platformConfig.port;
+  const PORT = 3000;
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     log.info('http', `Kisholoy full-stack server listening on http://0.0.0.0:${PORT} (${devMode ? 'vite dev middleware' : 'static dist'})`);
