@@ -6,11 +6,23 @@
 
 import 'dotenv/config';
 import express from 'express';
+import { randomBytes } from 'node:crypto';
+import { config as platformConfig } from './server/config';
+import { persistence } from './server/persistence/store';
+import { staffAuth } from './server/security/staffStore';
+import { customerAuth } from './server/security/customerAuth';
+import { setSessionCookies, clearSessionCookies } from './server/http/cookies';
+import { securityHeaders } from './server/http/headers';
+import { rateLimitMiddleware } from './server/http/rateLimit';
+import { AppError, errorMiddleware, log, sendInternalError } from './server/http/errors';
+import { setAuditSink } from './server/security/auditSink';
+import { orderCreateSchema, checkoutQuoteSchema, productWriteSchema, formatZodErrorSafe } from './server/validation/schemas';
+import { registerAuthRoutes } from './server/routes/auth';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { serverDb } from './server/db';
 import { calculateOrderFinance, calculateFinancialSummary, performReconciliationScan } from './server/financeEngine';
 import { paymentService } from './server/paymentService';
+import { gatewayCapabilities, verifySslcommerz } from './server/gateway';
 import { courierService } from './server/courierService';
 import { smsService } from './server/smsService';
 import { queueService } from './server/queueService';
@@ -33,7 +45,11 @@ import {
 } from './src/lib/validations';
 import { securityEngine } from './server/securityEngine';
 import { normalizeBdMobilePhone, phoneDigits } from './src/lib/phone';
-import { attachAuthContext, enforceStaffSurface, requireCustomerSelf, requireSupplierSelf, requireAddressOwner, requireNotificationOwner } from './server/authGuard';
+import type { Request, Response } from 'express';
+import { verifyQuote, CartValidationError } from './server/financeEngine';
+import { requireStepUp, sessionOperatorOf } from './server/security/stepUp';
+import { attachAuthContext, enforceApiSurface, requireCustomerSelf, requireSupplierSelf, requireAddressOwner, requireNotificationOwner, requireOrderNumberOwner, requireSuperAdmin, clientIpOf, resolveCustomerScope } from './server/authGuard';
+const enforceStaffSurface = enforceApiSurface;
 import { issueSessionToken } from './server/sessionTokens';
 import { backupEngine } from './server/backupEngine';
 import { supplierEngine } from './server/supplierEngine';
@@ -41,7 +57,20 @@ import { externalIntegrationsEngine } from './server/externalIntegrationsEngine'
 import { resendEmailService } from './server/resendEmailService';
 import { upstashRedisService } from './server/upstashService';
 import { mongoService } from './server/mongoService';
-import { getServicesHealthReport, checkFirebaseAdminHealth, checkSupabaseHealth } from './lib/services';
+/**
+ * Cloud-SDK diagnostics are loaded lazily. `firebase-admin` and
+ * `@supabase/supabase-js` are only needed by three health endpoints; importing
+ * them at module scope would force both into the Vercel function bundle (tens
+ * of megabytes, and a cold-start penalty on every request).
+ */
+async function loadServices() {
+  try {
+    return await import('./lib/services');
+  } catch (err) {
+    log.warn('services', 'cloud_sdk_unavailable_on_this_runtime', (err as Error).message);
+    return null;
+  }
+}
 import {
   getPrintSettings,
   savePrintSettings,
@@ -58,91 +87,155 @@ import {
 import { supplierSchema, supplierUpdateSchema, purchaseOrderSchema, formatZodError } from './src/lib/validations';
 import { Order, FlashDeal, Role, RateLimitTier, Customer, OrderSourceChannel } from './src/types';
 
-async function startServer() {
+/**
+ * Builds the Express application.
+ *
+ * Exported (instead of "start a listener") because the same app now serves two
+ * very different runtimes:
+ *   - a long-lived Node process (`npm run dev`, Cloud Run, Docker), and
+ *   - a Vercel serverless function (`api/index.js`), where there is no process
+ *     to keep and `app.listen()` would be a bug.
+ *
+ * `opts.apiOnly` skips static-file serving on serverless, where Vercel already
+ * serves `dist/` from its CDN.
+ */
+export /**
+ * Anonymous-safe product projection: what a shopper is allowed to see.
+ * Margins, supplier cost, procurement and internal metadata never leave the server.
+ */
+/** URL-safe slug used when a create request omits one. */
+function slugify(value: string): string {
+  return String(value || '')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/[\s-]+/g, '-')
+    .slice(0, 90) || `product-${Date.now().toString(36)}`;
+}
+
+function publicProductView<T extends Record<string, any>>(product: T): Record<string, unknown> {
+  const {
+    costPrice: _cost,
+    economics: _econ,
+    procurement: _proc,
+    supplierId: _sup,
+    metadata: _meta,
+    passwordHash: _pw,
+    ...rest
+  } = product;
+  void _cost; void _econ; void _proc; void _sup; void _meta; void _pw;
+  const available = Math.max(0, Number(product.stock ?? 0) - Number(product.reservedStock ?? 0));
+  return {
+    ...rest,
+    inStock: available > 0,
+    availableStock: available,
+    stockStatus: product.trackInventory === false ? 'IN_STOCK' : available > 0 ? (available <= (product.lowStockThreshold ?? 10) ? 'LOW_STOCK' : 'IN_STOCK') : 'OUT_OF_STOCK',
+  };
+}
+
+export async function createApp(opts: { apiOnly?: boolean; devVite?: boolean } = {}): Promise<express.Express> {
+  // Hydrate the durable store, bootstrap the administrator and (when asked)
+  // apply demo data BEFORE any route can answer. Every runtime — dev,
+  // standalone production and the serverless function — goes through here, so
+  // no entry point can serve traffic against an un-hydrated store or an
+  // administrator that was never created.
+  await ensureBootstrapped();
+
   const app = express();
-  const PORT = 3000;
 
-  // Phase 20: Security Headers & Hygiene (Configured for public sharing & iframe previews)
-  app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    // Allow public preview & sharing across AI Studio, Cloud Run, and web browsers
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://ai.studio https://*.google.com https://*.run.app;");
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-staff-auth, x-client-ip');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
-    if (req.method === 'OPTIONS') {
-      return res.sendStatus(204);
-    }
+  // Trust the proxy (Vercel / Cloud Run): required for correct client IPs in
+  // rate limiting, fraud scoring and audit rows.
+  app.set('trust proxy', 1);
+  app.disable('x-powered-by');
+
+  // -------------------------------------------------------------
+  // 0. Transport security, CORS and abuse controls
+  // -------------------------------------------------------------
+  app.use(securityHeaders({ reportOnly: process.env.KISHOLOY_CSP === 'report-only' }) as never);
+  app.use(rateLimitMiddleware() as never);
+
+  // Body limits: 25mb was reachable by any anonymous POST (a trivial memory /
+  // cost DoS on serverless, where the platform also caps payloads at 4.5mb).
+  app.use(express.json({ limit: platformConfig.security.maxBodySize as never }));
+  app.use(express.urlencoded({ extended: true, limit: '1mb' as never }));
+
+  // Parse cookies for the session layer (no external dependency needed).
+  // -------------------------------------------------------------
+  // 0b. Server-side authentication & authorization.
+  //
+  // `attachAuthContext` resolves the caller (staff / customer / supplier) from a
+  // signed session in an httpOnly cookie or a bearer token; `enforceApiSurface`
+  // then fails closed: any /api path not explicitly public needs the right
+  // identity and, for staff, the RBAC permission the route requires.
+  // Client-side ROUTE_PERMISSIONS is a UX affordance only.
+  // -------------------------------------------------------------
+  app.use(attachAuthContext as never);
+  app.use(enforceStaffSurface as never);
+
+  // Durable write-behind: never let a mutation-bearing response finish before
+  // its data is on disk / in the database. This is what makes an order survive
+  // a serverless isolate being recycled.
+  app.use((req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const originalEnd = res.end.bind(res);
+    (res as unknown as { end: (...args: unknown[]) => unknown }).end = ((...args: unknown[]) => {
+      try {
+        (serverDb as unknown as { syncAll?: () => void }).syncAll?.();
+      } catch (err) {
+        log.warn('persistence', 'sync_all_failed', (err as Error).message);
+      }
+      void persistence.flush().catch((err) => log.error('persistence', 'flush_failed', err));
+      return (originalEnd as (...a: unknown[]) => unknown)(...args);
+    }) as never;
     next();
   });
 
-  // Phase 20: Sliding Window Rate Limiting & Network Defense Middleware
-  app.use((req, res, next) => {
-    // Only apply rate limiting to API routes
-    if (!req.path.startsWith('/api/')) return next();
-
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-
-    let tier: RateLimitTier = 'STOREFRONT';
-    if (req.path.startsWith('/api/checkout') || req.path === '/api/orders/create') {
-      tier = 'CHECKOUT';
-    } else if (
-      (req.path.startsWith('/api/security/auth') && !req.path.includes('/verify') && !req.path.includes('/session')) ||
-      req.path.startsWith('/api/auth/login') ||
-      req.path.startsWith('/api/customer/auth/login') ||
-      req.path === '/api/suppliers/portal/login' ||
-      /^\/api\/suppliers\/[^/]+\/(portal-token|set-portal-password)$/.test(req.path)
-    ) {
-      tier = 'AUTH';
-    } else if (req.path.startsWith('/api/admin') || req.path.startsWith('/api/security') || req.path.startsWith('/api/marketing/command')) {
-      tier = 'ADMIN';
-    } else if (req.path.startsWith('/api/webhooks')) {
-      tier = 'WEBHOOK';
-    }
-
-    const check = securityEngine.checkRateLimit(tier, clientIp);
-    res.setHeader('X-RateLimit-Limit', check.limit);
-    res.setHeader('X-RateLimit-Remaining', check.remaining);
-    res.setHeader('X-RateLimit-Reset', Math.ceil(check.resetMs / 1000));
-
-    if (!check.allowed) {
-      return res.status(429).json({
-        error: 'Too Many Requests',
-        message: check.isBanned 
-          ? `Access temporarily blocked: ${check.banReason || 'Excessive requests violation'}`
-          : `Rate limit exceeded for tier ${tier}. Please wait before making more requests.`,
-        tier,
-        retryAfterSeconds: Math.ceil(check.resetMs / 1000)
-      });
-    }
-
-    next();
-  });
-
-  app.use(express.json({ limit: '25mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '25mb' }));
-
-  // Phase 21: Server-side authentication & authorization.
-  // `attachAuthContext` resolves the caller (staff / customer / supplier) into
-  // `req.auth`; `enforceStaffSurface` then requires a staff session for every
-  // /api write plus the sensitive reads. Client-side ROUTE_PERMISSIONS is now
-  // only a UX affordance — the server is the authority.
-  app.use(attachAuthContext);
-  app.use(enforceStaffSurface);
+  // -------------------------------------------------------------
+  // 0c. Authentication routes (staff + customer), hardened.
+  //     Replaces the inline handlers that used to live here, which included a
+  //     passwordless `persona-session` token minter, a hardcoded
+  //     `ensure-super-admin` bootstrap, a 10k-iteration PBKDF2 staff store with
+  //     shared salt, a customer "login" that verified no password, and a role
+  //     change that trusted `operatorRole` from the request body.
+  // -------------------------------------------------------------
+  registerAuthRoutes(app);
 
   // -------------------------------------------------------------
   // 1. Health Check
   // -------------------------------------------------------------
-  app.get('/api/health', (req, res) => {
+  app.get('/api/health', async (req, res) => {
+    // Honest posture: a green check here must never hide "orders will vanish".
+    const store = await persistence.health();
+    const staffAccounts = staffAuth.count();
     res.json({
-      status: 'ok',
+      status: store.durable || store.mode === 'memory' ? 'ok' : 'degraded',
       service: 'Kisholoy Backend API',
       timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'development'
+      environment: platformConfig.env,
+      persistence: {
+        mode: store.mode,
+        durable: store.durable,
+        latencyMs: store.latencyMs,
+        warning: store.durable ? null : 'VOLATILE: orders and admin edits do not survive a restart (set MONGODB_URI).',
+      },
+      bootstrap: {
+        staffAccounts,
+        adminReady: staffAccounts > 0,
+        warning: staffAccounts === 0 && platformConfig.isProduction
+          ? 'No administrator account exists; configure KISHOLOY_ADMIN_EMAIL + KISHOLOY_ADMIN_BOOTSTRAP_PASSWORD.'
+          : null,
+      },
+      payments: {
+        demoModeAllowed: platformConfig.security.allowDemoPayments,
+      },
     });
+  });
+
+  // Minimal, unauthenticated liveness probe for platform health checks.
+  app.get('/api/system/health', async (req, res) => {
+    const store = await persistence.health();
+    res.json({ ok: true, mode: store.mode, durable: store.durable, env: platformConfig.env });
   });
 
   // -------------------------------------------------------------
@@ -156,16 +249,26 @@ async function startServer() {
         data: statusOverview,
       });
     } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        error: err.message || 'Failed to retrieve integration status',
-      });
+      sendInternalError(res, err, 'api:diagnostics');
     }
   });
 
   app.post('/api/integrations/test-email', async (req, res) => {
     try {
-      const targetEmail = req.body?.email || process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com';
+      /**
+       * Never default to an address baked into the source: a "send a test email"
+       * button that quietly mails a personal inbox is both a privacy leak and a
+       * misleading pass. The recipient must be configured or given explicitly.
+       */
+      const targetEmail = String(req.body?.email || process.env.SYSTEM_ADMIN_EMAIL || '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(targetEmail)) {
+        return res.status(422).json({
+          success: false,
+          code: 'TEST_EMAIL_RECIPIENT_REQUIRED',
+          error: 'Provide a valid recipient address, or set SYSTEM_ADMIN_EMAIL in the deployment environment.',
+          errorBn: 'সঠিক প্রাপকের ইমেইল ঠিকানা দিন, অথবা ডিপ্লয়মেন্ট এনভায়রনমেন্টে SYSTEM_ADMIN_EMAIL নির্ধারণ করুন।',
+        });
+      }
       const result = await resendEmailService.sendEmail({
         to: targetEmail,
         subject: 'কিশলয় লাইভ টেস্ট ইমেইল - Kisholoy Production Engine Verification',
@@ -191,10 +294,7 @@ async function startServer() {
         data: result,
       });
     } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        error: err.message,
-      });
+      sendInternalError(res, err, 'api:email_test');
     }
   });
 
@@ -206,7 +306,7 @@ async function startServer() {
         data: pingResult,
       });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      sendInternalError(res, err, '/api/integrations/redis/ping');
     }
   });
 
@@ -218,7 +318,7 @@ async function startServer() {
         data: health,
       });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      sendInternalError(res, err, '/api/integrations/mongo/health');
     }
   });
 
@@ -230,154 +330,204 @@ async function startServer() {
         data: githubStatus,
       });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      sendInternalError(res, err, '/api/integrations/github/sync');
     }
   });
 
   // Unified Database Services (Firebase Admin & Supabase Client)
   app.get('/api/services/status', async (req, res) => {
     try {
-      const report = await getServicesHealthReport();
+      const services = await loadServices();
+      if (!services) {
+        return res.json({ success: true, data: { unavailable: 'Cloud SDK diagnostics are not bundled in this runtime.' } });
+      }
+      const report = await services.getServicesHealthReport();
       res.json({
         success: true,
         data: report,
       });
     } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        error: err.message || 'Failed to retrieve database services health',
-      });
+      sendInternalError(res, err, 'api:diagnostics');
     }
   });
 
   app.post('/api/services/firebase/verify', async (req, res) => {
     try {
-      const health = await checkFirebaseAdminHealth();
+      const services = await loadServices();
+      if (!services) return res.json({ success: false, status: 'UNAVAILABLE' });
+      const health = await services.checkFirebaseAdminHealth();
       res.json({ success: health.connected, data: health });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      sendInternalError(res, err, '/api/services/firebase/verify');
     }
   });
 
   app.post('/api/services/supabase/verify', async (req, res) => {
     try {
-      const health = await checkSupabaseHealth();
+      const services = await loadServices();
+      if (!services) return res.json({ success: false, status: 'UNAVAILABLE' });
+      const health = await services.checkSupabaseHealth();
       res.json({ success: health.connected, data: health });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      sendInternalError(res, err, '/api/services/supabase/verify');
     }
   });
 
   // -------------------------------------------------------------
   // 2. Financial Calculation Engine (Rule: Never trust client numbers)
   // -------------------------------------------------------------
-  app.post('/api/checkout/calculate', (req, res) => {
+  /**
+   * Server-authoritative quote. Also the source of the signed `quoteToken`
+   * that /api/orders/create can optionally verify, so a page left open for an
+   * hour cannot check out against a price list that has since changed.
+   */
+  app.post('/api/checkout/calculate', (req: Request, res: Response) => {
     try {
-      const { items, division, district, couponCode } = req.body;
-      if (!items || !Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: 'Items array is required for calculation' });
+      const parsed = checkoutQuoteSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(422).json({ success: false, ...formatZodErrorSafe(parsed.error) });
       }
+      const { items, division, district, couponCode } = parsed.data;
 
       const calculation = calculateOrderFinance({
         items,
         division: division || 'Dhaka',
         district: district || 'Dhaka',
-        couponCode
+        couponCode,
+        customerId: req.auth?.kind === 'CUSTOMER' ? req.auth.customerId : undefined,
+        customerPhone: req.body?.customerPhone ? String(req.body.customerPhone).slice(0, 20) : undefined,
       });
 
       return res.json({
         success: true,
-        data: calculation
+        data: calculation,
+        quoteToken: calculation.checksum,
+        quoteExpiresInSeconds: 900,
       });
     } catch (err: any) {
-      return res.status(400).json({ success: false, error: err.message });
+      if (err instanceof CartValidationError) {
+        return res.status(409).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+          errorBn: 'কার্টের তথ্য বা মজুদ যাচাই করা যায়নি।',
+          details: err.details,
+          // Tell the client the maximum it may order so the UI can recover.
+          ...(typeof err.details?.available === 'number' ? { maxQuantity: err.details.available } : {}),
+        });
+      }
+      return sendInternalError(res, err, '/api/checkout/calculate');
     }
   });
+  // -------------------------------------------------------------
+  // 3. Order Placement Engine
+  //
+  // Hardening applied here:
+  //   * schema-validated input (quantities, phone, address, lengths);
+  //   * every price, discount, delivery fee and total recomputed on the server
+  //     from the catalogue — the client sends ids and quantities only;
+  //   * optional signed quote token from /api/checkout/quote, verified for
+  //     integrity + freshness so a stale price sheet cannot be replayed;
+  //   * idempotency key, so a double-clicked "Place Order" (or a retried
+  //     request after a timeout) cannot create two orders;
+  //   * atomic stock allocation with compensating rollback, so a partially
+  //     allocated cart never leaks inventory;
+  //   * never trusts payment claims: gateway methods stay PENDING until an
+  //     IPN/webhook verifies them server-side.
+  // -------------------------------------------------------------
+  app.post('/api/orders/create', async (req: Request, res: Response) => {
+    let allocation: { success: boolean; applied: Array<{ productId: string; quantity: number }>; error?: string } = { success: false, applied: [] };
+    let claimedKey: string | null = null;
 
-  // -------------------------------------------------------------
-  // 3. Order Placement Engine (Atomic inventory lock & server pricing)
-  // -------------------------------------------------------------
-  app.post('/api/orders/create', async (req, res) => {
     try {
-      const { customer, shippingAddress, items, paymentMethod, couponCode, notes } = req.body;
+      const parsed = orderCreateSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(422).json({ success: false, ...formatZodErrorSafe(parsed.error) });
+      }
+      const input = parsed.data;
+      const { customer, shippingAddress, items, paymentMethod, couponCode, notes } = input;
 
-      if (!customer || !customer.name || !customer.phone) {
-        return res.status(400).json({ error: 'Valid customer name and phone are required' });
+      // ── Idempotency: a retry returns the order that was already created ──
+      if (input.idempotencyKey) {
+        const claim = await persistence.claimIdempotency(`order:${input.idempotencyKey}`, {});
+        if (claim?.replayed) {
+          const existing =
+            (claim.record?.orderNumber && serverDb.orders.find((o) => o.orderNumber === claim.record!.orderNumber)) ||
+            (claim.record?.orderId ? serverDb.orders.find((o) => o.id === claim.record!.orderId) : undefined);
+          if (existing) {
+            return res.status(200).json({
+              success: true,
+              order: existing,
+              duplicate: true,
+              message: 'This order was already submitted. Showing the order that was created.',
+              messageBn: 'এই অর্ডারটি আগেই জমা হয়েছে। তৈরি হওয়া অর্ডারটি দেখানো হচ্ছে।',
+            });
+          }
+        }
+        claimedKey = input.idempotencyKey;
       }
 
-      if (!shippingAddress || !shippingAddress.address || !shippingAddress.district) {
-        return res.status(400).json({ error: 'Valid delivery address and district are required' });
-      }
-
-      if (!items || !Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: 'At least one item is required to place an order' });
-      }
-
-      // Authoritative financial recalculation with customer context
+      // ── Authoritative recalculation (never trust the client totals) ──────
       const calculation = calculateOrderFinance({
         items,
         division: shippingAddress.division || 'Dhaka',
         district: shippingAddress.district,
         couponCode,
-        customerPhone: customer.phone
+        customerPhone: customer.phone,
+        customerId: req.auth?.kind === 'CUSTOMER' ? req.auth.customerId : undefined,
       });
 
-      // Deduct inventory atomically with rollback: if any line fails to
-      // allocate, restore every deduction already made so we never leak stock.
-      const deductedItems: { productId: string; quantity: number }[] = [];
-      const rollbackStock = () => {
-        for (const d of deductedItems) {
-          serverDb.adjustInventory({
-            productId: d.productId,
-            quantityChange: d.quantity,
-            reason: `Order allocation rollback (atomic failure)`,
-            operator: 'ORDER_ENGINE'
+      if (input.quoteToken) {
+        const quoteCheck = verifyQuote(input.quoteToken, {
+          subtotal: calculation.subtotal,
+          shippingFee: calculation.shippingFee,
+          discount: calculation.discount,
+          grandTotal: calculation.grandTotal,
+          couponCode,
+          items: calculation.verifiedItems.map((i) => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice })),
+        });
+        if (!quoteCheck.ok && quoteCheck.reason && quoteCheck.reason !== 'MISSING') {
+          return res.status(409).json({
+            success: false,
+            code: 'QUOTE_STALE',
+            error: quoteCheck.message || 'Your cart total changed. Please review and confirm again.',
+            errorBn: 'কার্টের মোট পরিমাণ বদলে গেছে। অনুগ্রহ করে নতুন করে দেখে নিশ্চিত করুন।',
+            calculation,
           });
         }
-        deductedItems.length = 0;
-      };
-
-      // Allocate the order identity BEFORE touching stock so every ledger row
-      // written during allocation can reference the order it belongs to.
-      const orderNumber = `KSH-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const orderId = `ord-${Date.now()}`;
-
-      try {
-        for (const item of calculation.verifiedItems) {
-          const deducted = serverDb.updateProductStock(item.productId, item.quantity, {
-            orderNumber,
-            operator: 'ORDER_ENGINE'
-          });
-          if (!deducted) {
-            throw new Error(`Failed to allocate stock for "${item.title}". It may have just sold out.`);
-          }
-          deductedItems.push({ productId: item.productId, quantity: item.quantity });
-        }
-      } catch (deductErr: any) {
-        rollbackStock();
-        return res.status(400).json({ error: deductErr.message });
       }
-      const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
-      // Canonicalise the buyer's phone once, up front. Every downstream join
-      // (CRM dedupe, loyalty wallet, fraud velocity, blacklist, marketing RFM)
-      // is phone-keyed, so storing raw user input made the same human look like
-      // several different people depending on how they typed their number.
+      // ── Atomic allocation ───────────────────────────────────────────────
+      const orderNumber = serverDb.nextOrderNumber();
+      const orderId = `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+      allocation = await serverDb.allocateStockAtomically(
+        calculation.verifiedItems.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+        { orderNumber, operator: 'ORDER_ENGINE' }
+      );
+
+      if (!allocation.success) {
+        return res.status(409).json({
+          success: false,
+          code: 'STOCK_ALLOCATION_FAILED',
+          error: allocation.error || 'Some items could not be reserved. Please adjust your cart.',
+          errorBn: 'কিছু পণ্য সংরক্ষণ করা যায়নি। অনুগ্রহ করে কার্ট দেখে আবার চেষ্টা করুন।',
+        });
+      }
+
+      const clientIp = clientIpOf(req);
       const canonicalPhone = normalizeBdMobilePhone(customer.phone) || customer.phone.trim();
 
-      // Resolve (or create) the CRM customer record so guest checkouts are no
-      // longer invisible to Customer 360, RFM segmentation and CLV metrics.
       const crmCustomer = serverDb.upsertCustomerFromOrder({
-        name: customer.name,
+        name: customer.name.trim(),
         phone: canonicalPhone,
         email: customer.email,
         address: shippingAddress.address,
         district: shippingAddress.district,
         thana: shippingAddress.thana,
-        source: req.body.orderSource || 'WEB'
+        source: input.orderSource || 'WEB',
       });
 
-      // Perform Authoritative Real-Time Fraud & Risk Assessment
       const fraudRisk = fraudEngine.evaluateOrderRisk({
         phone: canonicalPhone,
         email: customer.email?.trim(),
@@ -388,18 +538,24 @@ async function startServer() {
         paymentMethod: paymentMethod || 'COD',
         total: calculation.grandTotal,
         items: calculation.verifiedItems,
-        clientIp
+        clientIp,
       });
 
       const isAutoBlocked = fraudRisk.recommendation === 'BLOCK';
-      const orderSource: OrderSourceChannel = req.body.orderSource || 'WEB';
-      const channelDetails = req.body.channelDetails;
-      // Marketing Command Center: persist the captured UTM auto-tag as additive,
-      // sanitized metadata. It never participates in money math.
+      const orderSource: OrderSourceChannel = input.orderSource || 'WEB';
+      const channelDetails = input.channelDetails
+        ? ({ ...(input.channelDetails as Record<string, unknown>), channel: orderSource } as unknown as Order['channelDetails'])
+        : undefined;
       const orderUtm = marketingCommandCenter.sanitizeOrderUtm(req.body.utm);
-      const advancePayment = req.body.advancePayment;
-      const advancePaymentAmount = advancePayment?.amount || req.body.advancePaymentAmount || 0;
-      const balanceDueCod = req.body.balanceDueCod ?? Math.max(0, calculation.grandTotal - advancePaymentAmount);
+
+      // Advance payment counts only when the gateway confirms it. A client
+      // claiming `isPaid: true` is stored as an unverified claim, never as PAID.
+      const advancePayment = input.advancePayment;
+      const advancePaymentAmount = Number(advancePayment?.amount || 0) || 0;
+      const gatewayTransactionId = String(advancePayment?.transactionId || '').slice(0, 80);
+      const advanceClaimVerified =
+        Boolean(gatewayTransactionId) && paymentService.isTransactionVerified(gatewayTransactionId, calculation.grandTotal);
+      const balanceDueCod = Math.max(0, calculation.grandTotal - (advanceClaimVerified ? advancePaymentAmount : 0));
 
       const newOrder: Order = {
         id: orderId,
@@ -408,14 +564,24 @@ async function startServer() {
         orderSource,
         channelDetails,
         utm: orderUtm,
-        advancePayment,
-        advancePaymentAmount,
+        idempotencyKey: claimedKey || undefined,
+        advancePayment: advancePayment
+          ? {
+              ...advancePayment,
+              amount: Number(advancePayment.amount || 0),
+              method: (advancePayment.method as 'BKASH') || ('OTHER' as const),
+              verified: advanceClaimVerified,
+              isPaid: advanceClaimVerified,
+              verificationState: advanceClaimVerified ? 'GATEWAY_VERIFIED' : 'CLIENT_CLAIMED_UNVERIFIED',
+            }
+          : undefined,
+        advancePaymentAmount: advanceClaimVerified ? advancePaymentAmount : 0,
         balanceDueCod,
         customer: {
           id: crmCustomer.id,
           name: customer.name.trim(),
           phone: canonicalPhone,
-          email: customer.email?.trim() || crmCustomer.email
+          email: customer.email || crmCustomer.email,
         },
         shippingAddress: {
           firstName: shippingAddress.firstName || customer.name,
@@ -427,9 +593,9 @@ async function startServer() {
           district: shippingAddress.district,
           thana: shippingAddress.thana || 'Central',
           postalCode: shippingAddress.postalCode,
-          notes: notes?.trim()
+          notes: notes?.trim(),
         },
-        items: calculation.verifiedItems.map(it => ({
+        items: calculation.verifiedItems.map((it) => ({
           productId: it.productId,
           title: it.title,
           titleBn: it.titleBn,
@@ -437,21 +603,27 @@ async function startServer() {
           quantity: it.quantity,
           image: it.image,
           sku: it.sku,
-          variantName: it.variantName
+          variantName: it.variantName,
         })),
         subtotal: calculation.subtotal,
         shippingFee: calculation.shippingFee,
         discount: calculation.discount,
         total: calculation.grandTotal,
         paymentMethod: paymentMethod || 'COD',
-        paymentStatus: isAutoBlocked ? 'CANCELLED' : (advancePayment?.isPaid ? 'PARTIALLY_PAID' : (paymentMethod === 'COD' ? 'UNPAID' : 'PENDING')),
+        paymentStatus: isAutoBlocked
+          ? 'CANCELLED'
+          : advanceClaimVerified
+            ? 'PARTIALLY_PAID'
+            : paymentMethod === 'COD'
+              ? 'UNPAID'
+              : 'PENDING',
         settlementStatus: isAutoBlocked ? 'CANCELLED' : 'PENDING',
-        orderStatus: isAutoBlocked ? 'CANCELLED' : (req.body.orderStatus || 'PENDING'),
-        verificationStatus: isAutoBlocked ? 'REJECTED' : (req.body.verificationStatus || (orderSource !== 'WEB' ? 'PHONE_VERIFIED' : 'UNVERIFIED')),
+        orderStatus: isAutoBlocked ? 'CANCELLED' : 'PENDING',
+        verificationStatus: isAutoBlocked ? 'REJECTED' : orderSource !== 'WEB' ? 'PHONE_VERIFIED' : 'UNVERIFIED',
         fraudRisk,
         courier: {
           provider: isAutoBlocked ? 'Manual' : 'Steadfast',
-          status: isAutoBlocked ? 'CANCELLED' : 'CREATED'
+          status: isAutoBlocked ? 'CANCELLED' : 'CREATED',
         },
         notes: notes?.trim(),
         timeline: [
@@ -459,39 +631,39 @@ async function startServer() {
             status: isAutoBlocked ? 'CANCELLED' : 'PENDING',
             timestamp: new Date().toISOString(),
             note: isAutoBlocked
-              ? `Auto-cancelled by Fraud Engine: High risk (${fraudRisk.reasons.join('; ')})`
-              : `Order placed via ${orderSource}${channelDetails?.operatorName ? ` by agent ${channelDetails.operatorName}` : ''}. Verified Total: ৳${calculation.grandTotal}. Advance: ৳${advancePaymentAmount}. COD Due: ৳${balanceDueCod}.`,
-            updatedBy: channelDetails?.operatorName ? `AGENT_${channelDetails.operatorName}` : 'SYSTEM_API'
-          }
-        ]
+              ? `Auto-cancelled by Fraud Engine: ${fraudRisk.reasons.join('; ') || 'high risk score'}`
+              : `Order placed via ${orderSource}${channelDetails?.operatorName ? ` by agent ${channelDetails.operatorName}` : ''}. Verified total ৳${calculation.grandTotal}${advanceClaimVerified ? `, advance received ৳${advancePaymentAmount}` : ''}${balanceDueCod > 0 ? `, due ৳${balanceDueCod}` : ''}.`,
+            updatedBy: channelDetails?.operatorName ? `AGENT_${channelDetails.operatorName}` : 'SYSTEM_API',
+          },
+        ],
       };
 
-      // If blocked by fraud engine, restore inventory immediately
       if (isAutoBlocked) {
-        for (const item of calculation.verifiedItems) {
-          serverDb.adjustInventory({
-            productId: item.productId,
-            quantityChange: item.quantity,
-            reason: `Fraud rejection rollback for order ${orderNumber}`,
-            operator: 'FRAUD_SECURITY_ENGINE'
-          });
-        }
+        await serverDb.rollbackAllocations(allocation.applied, { orderNumber, operator: 'FRAUD_SECURITY_ENGINE' });
+        allocation = { success: false, applied: [] };
+        serverDb.addOrder(newOrder);
+        serverDb.addAuditLog(
+          'FRAUD_ORDER_AUTO_BLOCKED',
+          'Order',
+          newOrder.orderNumber,
+          `Order ${newOrder.orderNumber} auto-cancelled for ৳${newOrder.total}. Risk ${fraudRisk.riskRating} (score ${fraudRisk.riskScore}).`
+        );
+        return res.status(409).json({
+          success: false,
+          code: 'ORDER_BLOCKED_BY_RISK_ENGINE',
+          orderNumber: newOrder.orderNumber,
+          error: 'Your order was flagged for manual verification. Our team will contact you on the provided phone number.',
+          errorBn: 'আপনার অর্ডারটি যাচাইয়ের জন্য চিহ্নিত হয়েছে। আমাদের টিম দেওয়া নম্বরে যোগাযোগ করবে।',
+        });
       }
 
-      // If not blocked, calculate optimal Multi-Warehouse Hub Fulfillment Routing
-      if (!isAutoBlocked) {
+      try {
         fulfillmentEngine.routeOrder(newOrder);
 
-        // Record coupon usage ledger
         if (calculation.couponApplied?.code) {
-          serverDb.recordCouponUsage(
-            calculation.couponApplied.code,
-            calculation.discount,
-            calculation.grandTotal
-          );
+          serverDb.recordCouponUsage(calculation.couponApplied.code, calculation.discount, calculation.grandTotal);
         }
 
-        // Award Customer Loyalty Club Points
         const wallet = serverDb.getOrCreateLoyaltyWallet(
           newOrder.customer.id,
           newOrder.customer.name,
@@ -506,103 +678,220 @@ async function startServer() {
             type: 'EARN_PURCHASE',
             orderId: newOrder.id,
             orderNumber: newOrder.orderNumber,
-            note: `Earned on order ${newOrder.orderNumber} (Tier: ${wallet.tier})`
+            note: `Earned on order ${newOrder.orderNumber} (Tier: ${wallet.tier})`,
           });
         }
+      } catch (sideEffectErr) {
+        // Routing/coupons/loyalty are secondary: the order itself is valid.
+        log.warn('orders', `post_create_side_effect_failed (${newOrder.orderNumber})`, sideEffectErr);
       }
 
       serverDb.addOrder(newOrder);
-
-      // Roll the order into the buyer's lifetime CRM aggregates so repeat-rate,
-      // CLV and RFM segmentation reflect guest checkouts too.
       serverDb.recordCustomerOrderStats(crmCustomer.id, newOrder.total || 0);
 
-      // Enqueue asynchronous order confirmation SMS only for non-blocked orders
-      if (!isAutoBlocked) {
-        queueService.enqueue(
-          'SMS_DISPATCH',
-          `Order Confirmed SMS to ${customer.phone}`,
-          3
-        );
-
-        // Multi-Channel Automated Notification Dispatch (SMS, WhatsApp, Email, In-App)
-        notificationService.dispatchAutomatedEvent('ORDER_CONFIRMATION', {
-          orderNumber: newOrder.orderNumber,
-          customerName: customer.name,
-          customerPhone: customer.phone,
-          customerEmail: customer.email,
-          customerId: customer.id,
-          totalAmount: newOrder.total,
-          paymentMethod: newOrder.paymentMethod,
-          trackingUrl: `/track/${newOrder.orderNumber}`
-        }).catch(e => console.error('Automated notification dispatch failed', e));
+      if (claimedKey) {
+        void persistence.upsertOne('idempotency', { key: `order:${claimedKey}`, orderNumber, orderId }, 'key');
       }
 
+      void queueService.enqueue('SMS_DISPATCH', `Order Confirmed SMS to ${canonicalPhone}`, 3);
+      notificationService
+        .dispatchAutomatedEvent('ORDER_CONFIRMATION', {
+          orderNumber: newOrder.orderNumber,
+          customerName: customer.name,
+          customerPhone: canonicalPhone,
+          customerEmail: customer.email,
+          customerId: crmCustomer.id,
+          totalAmount: newOrder.total,
+          paymentMethod: newOrder.paymentMethod,
+          trackingUrl: `/track-order?order=${newOrder.orderNumber}`,
+        })
+        .catch((e) => log.warn('notifications', 'order_confirmation_dispatch_failed', e));
+
       serverDb.addAuditLog(
-        isAutoBlocked ? 'FRAUD_ORDER_AUTO_BLOCKED' : 'ORDER_CREATED_SERVER',
+        'ORDER_CREATED_SERVER',
         'Order',
         newOrder.orderNumber,
         `Order ${newOrder.orderNumber} placed for ৳${newOrder.total} (${newOrder.paymentMethod}). Fraud Risk: ${fraudRisk.riskRating} (Score: ${fraudRisk.riskScore}).`
       );
 
+      // Flush durable state before answering: on serverless the isolate may be
+      // frozen the moment this response ends.
+      await persistence.flush();
+
       return res.status(201).json({
         success: true,
         order: newOrder,
-        calculation
+        calculation,
+        paymentVerification: {
+          state: advanceClaimVerified ? 'GATEWAY_VERIFIED' : 'AWAITING_GATEWAY_CONFIRMATION',
+          message: advanceClaimVerified
+            ? 'Advance payment verified against the gateway.'
+            : 'Payment is not confirmed until the gateway webhook is received.',
+        },
       });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      // Compensate: never leave stock reserved for an order that was not saved.
+      if (allocation.success && allocation.applied.length) {
+        await serverDb.rollbackAllocations(allocation.applied, { orderNumber: 'ORPHAN-CLEANUP', operator: 'ORDER_ENGINE' });
+      }
+      if (err instanceof CartValidationError) {
+        return res.status(409).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+          errorBn: 'পণ্যের মজুদ বা কার্টের তথ্য যাচাই করা যায়নি।',
+          details: err.details,
+        });
+      }
+      return sendInternalError(res, err, 'orders:create', {
+        fallback: 'We could not place your order. Please check your cart and try again.',
+        fallbackBn: 'আপনার অর্ডারটি সম্পন্ন করা যায়নি। কার্ট দেখে আবার চেষ্টা করুন।',
+      });
     }
   });
+
 
   // -------------------------------------------------------------
   // Catalog & Category Management Endpoints (Admin & Storefront)
   // -------------------------------------------------------------
-  app.get('/api/products', (req, res) => {
+  /**
+   * Storefront catalogue read.
+   *
+   * Two things were wrong here: it returned `DRAFT`/`INACTIVE` items to anyone,
+   * and it returned the whole record — including `costPrice`, supplier cost and
+   * procurement detail, i.e. the platform's margins. Anonymous callers now get a
+   * public projection of sellable products; staff get everything.
+   */
+  app.get('/api/products', (req: Request, res: Response) => {
     try {
-      res.json({ success: true, products: serverDb.products });
+      const isStaff = req.auth?.kind === 'STAFF';
+      const requestedStatus = String(req.query.status || '').toUpperCase();
+
+      let list = serverDb.products.filter((p) => !p.isDeleted);
+      if (!isStaff) {
+        list = list.filter((p) => (p.status || 'ACTIVE') === 'ACTIVE');
+      } else if (requestedStatus) {
+        list = list.filter((p) => (p.status || 'ACTIVE') === requestedStatus);
+      }
+
+      const total = list.length;
+      const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit ?? '200'), 10) || 200));
+      const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? '0'), 10) || 0);
+      const page = list.slice(offset, offset + limit);
+
+      const products = page.map((p) => (isStaff ? p : publicProductView(p)));
+      res.json({ success: true, products, total, limit, offset, hasMore: offset + page.length < total });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/products');
     }
   });
 
-  app.post('/api/products', (req, res) => {
+  /**
+   * Product writes.
+   *
+   * The create route used to hand `req.body` straight to the store, so a caller
+   * could set the `id`, `operator` (spoofing who did it) or arbitrary internal
+   * fields. Writes are now schema-validated, the operator is taken from the
+   * authenticated session, and SKU/slug uniqueness is enforced here so the
+   * durable unique index cannot be raced.
+   */
+  /**
+   * Product detail by id, SKU or slug — the endpoint the storefront deep links
+   * (`/product/:slug`) need so a shared URL can be rendered without downloading
+   * the whole catalogue. Archived products answer 404 like missing ones.
+   */
+  app.get('/api/products/:idOrSlug', (req: Request, res: Response) => {
     try {
-      const { title, price, category, sku } = req.body;
-      if (!title || price === undefined || !category) {
-        return res.status(400).json({ error: 'Title, price, and category are required' });
+      const key = String(req.params.idOrSlug || '').trim();
+      const found = serverDb.products.find(
+        (p) => !p.isDeleted && (p.id === key || p.slug === key || p.sku === key)
+      );
+      if (!found || (!found.status || found.status === 'ACTIVE') === false) {
+        if (found && req.auth?.kind !== 'STAFF' && found.status !== 'ACTIVE') {
+          return res.status(404).json({ success: false, error: 'Product not found.', errorBn: 'পণ্যটি পাওয়া যায়নি।', code: 'NOT_FOUND' });
+        }
       }
-      const operator = req.body.operator || 'ADMIN';
-      const newProd = serverDb.addProduct(req.body, operator);
+      if (!found) {
+        return res.status(404).json({ success: false, error: 'Product not found.', errorBn: 'পণ্যটি পাওয়া যায়নি।', code: 'NOT_FOUND' });
+      }
+      const view = req.auth?.kind === 'STAFF' ? found : publicProductView(found);
+      const related = serverDb.products
+        .filter((p) => !p.isDeleted && p.status === 'ACTIVE' && p.categorySlug === found.categorySlug && p.id !== found.id)
+        .slice(0, 8);
+      return res.json({
+        success: true,
+        product: view,
+        relatedIds: related.map((p) => p.id),
+        availableStock: Math.max(0, Number(found.stock || 0) - Number(found.reservedStock || 0)),
+      });
+    } catch (err) {
+      return sendInternalError(res, err, '/api/products/:idOrSlug');
+    }
+  });
+
+  app.post('/api/products', (req: Request, res: Response) => {
+    try {
+      const parsed = productWriteSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(422).json({ success: false, ...formatZodErrorSafe(parsed.error) });
+      }
+      const data = parsed.data;
+      const operator = req.auth?.userName || req.auth?.userId || 'UNKNOWN_STAFF';
+
+      const sku = (data.sku || '').trim();
+      if (sku && serverDb.products.some((p) => p.sku === sku && !p.isDeleted)) {
+        return res.status(409).json({
+          success: false, code: 'SKU_TAKEN',
+          error: `SKU "${sku}" is already used by another product.`,
+          errorBn: `এই SKU ("${sku}") আগেই অন্য পণ্যে ব্যবহার করা হয়েছে।`,
+        });
+      }
+      const slug = (data.slug || slugify(data.title));
+      if (serverDb.products.some((p) => p.slug === slug && !p.isDeleted)) {
+        return res.status(409).json({
+          success: false, code: 'SLUG_TAKEN',
+          error: 'That URL slug is already taken.', errorBn: 'এই স্লাগটি আগেই ব্যবহার করা হয়েছে।',
+        });
+      }
+
+      const newProd = serverDb.addProduct(
+        { ...data, slug, sku: sku || `KSH-${Date.now().toString(36).toUpperCase()}`, images: data.images?.length ? data.images : ['/products/placeholder.jpg'] } as never,
+        operator
+      );
       res.status(201).json({ success: true, product: newProd });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/products');
     }
   });
 
-  app.put('/api/products/:id', (req, res) => {
+  app.put('/api/products/:id', (req: Request, res: Response) => {
     try {
-      const operator = req.body.operator || 'ADMIN';
-      const updated = serverDb.updateProduct(req.params.id, req.body, operator);
+      const parsed = productWriteSchema.partial().safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(422).json({ success: false, ...formatZodErrorSafe(parsed.error) });
+      }
+      const operator = req.auth?.userName || req.auth?.userId || 'UNKNOWN_STAFF';
+      const updated = serverDb.updateProduct(req.params.id, parsed.data as never, operator);
       if (!updated) {
-        return res.status(404).json({ error: 'Product not found' });
+        return res.status(404).json({ success: false, error: 'Product not found.', errorBn: 'পণ্যটি পাওয়া যায়নি।' });
       }
       res.json({ success: true, product: updated });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/products/:id');
     }
   });
 
-  app.delete('/api/products/:id', (req, res) => {
+  app.delete('/api/products/:id', (req: Request, res: Response) => {
     try {
-      const operator = req.query.operator ? String(req.query.operator) : 'ADMIN';
+      const operator = req.auth?.userName || req.auth?.userId || 'UNKNOWN_STAFF';
+      // Soft delete: historical order lines must keep resolving to a product.
       const success = serverDb.deleteProduct(req.params.id, operator);
       if (!success) {
-        return res.status(404).json({ error: 'Product not found' });
+        return res.status(404).json({ success: false, error: 'Product not found.', errorBn: 'পণ্যটি পাওয়া যায়নি।' });
       }
-      res.json({ success: true, message: 'Product removed from catalog' });
+      res.json({ success: true, message: 'Product archived (history preserved).', messageBn: 'পণ্যটি আর্কাইভ করা হয়েছে (ইতিহাস সংরক্ষিত)।' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/products/:id');
     }
   });
 
@@ -610,7 +899,7 @@ async function startServer() {
     try {
       res.json({ success: true, categories: serverDb.categories });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/categories');
     }
   });
 
@@ -620,24 +909,24 @@ async function startServer() {
       if (!name || !slug) {
         return res.status(400).json({ error: 'Category name and slug are required' });
       }
-      const operator = req.body.operator || 'ADMIN';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const newCat = serverDb.addCategory(req.body, operator);
       res.status(201).json({ success: true, category: newCat });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/categories');
     }
   });
 
   app.put('/api/categories/:id', (req, res) => {
     try {
-      const operator = req.body.operator || 'ADMIN';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const updated = serverDb.updateCategory(req.params.id, req.body, operator);
       if (!updated) {
         return res.status(404).json({ error: 'Category not found' });
       }
       res.json({ success: true, category: updated });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/categories/:id');
     }
   });
 
@@ -650,22 +939,18 @@ async function startServer() {
       }
       res.json({ success: true, message: 'Category removed' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/categories/:id');
     }
   });
 
   // -------------------------------------------------------------
   // Admin & System Order Fetching Endpoint
   // -------------------------------------------------------------
-  app.get('/api/orders', (req, res) => {
+  app.get('/api/orders', (req: Request, res: Response) => {
     try {
-      // Identify the caller. A customer session bearer (`ksh-cust-sess-<id>-<ts>`)
-      // scopes the response down to that customer's own orders; staff/system
-      // callers keep the full list.
-      const authHeader = req.headers.authorization;
-      const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-      const custMatch = /^ksh-cust-sess-(.+)-\d+$/.exec(bearer);
-      const scopedCustomerId = custMatch ? custMatch[1] : null;
+      // Scoping is decided from the verified session identity — never from a
+      // value in the query string or from the shape of a bearer token.
+      const scopedCustomerId = resolveCustomerScope(req);
 
       // Ensure all orders have an authoritative fraud risk assessment
       const orders = serverDb.orders.map(o => {
@@ -697,9 +982,19 @@ async function startServer() {
         return res.json({ success: true, orders: scoped, scopedTo: scopedCustomerId });
       }
 
-      res.json({ success: true, orders });
+      // Staff views are paginated newest-first; the admin table used to receive
+      // the entire order book in one response.
+      const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit ?? '100'), 10) || 100));
+      const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? '0'), 10) || 0);
+      res.json({
+        success: true,
+        orders: orders.slice(offset, offset + limit),
+        total: orders.length,
+        limit,
+        offset,
+      });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/orders');
     }
   });
 
@@ -735,14 +1030,44 @@ async function startServer() {
       return storedDigits.includes(queryDigits) || queryDigits.includes(storedDigits);
     };
 
+    /**
+     * Order numbers are enumerable, and this response contains the recipient's
+     * name, phone and full delivery address. Knowing the number alone therefore
+     * cannot be enough: the caller must also prove they know the mobile number
+     * used at checkout — or arrive as the signed-in customer the order belongs
+     * to. A lookup by phone alone stays allowed (that is the "I lost my order
+     * number" path), and is matched on canonical digits.
+     */
+    const normalizedNumber = orderNumber ? String(orderNumber).trim().toLowerCase() : '';
+    const sessionCustomerId = req.auth?.kind === 'CUSTOMER' ? req.auth.customerId : undefined;
+
+    if (normalizedNumber && !rawPhone && !sessionCustomerId) {
+      return res.status(400).json({
+        success: false,
+        code: 'TRACK_VERIFICATION_REQUIRED',
+        error: 'Enter the order number together with the mobile number used at checkout.',
+        errorBn: 'অর্ডার নাম্বারের সাথে চেকআউটে দেওয়া মোবাইল নাম্বারটিও লিখুন।',
+      });
+    }
+
     const order = serverDb.orders.find(o => {
-      const matchNum = orderNumber ? o.orderNumber.toLowerCase() === String(orderNumber).trim().toLowerCase() : false;
-      if (matchNum) return true;
-      return matchPhoneFor(o.customer?.phone) || matchPhoneFor(o.shippingAddress?.phone);
+      const matchesNumber = normalizedNumber ? o.orderNumber?.toLowerCase() === normalizedNumber : false;
+      const matchesPhone = matchPhoneFor(o.customer?.phone) || matchPhoneFor(o.shippingAddress?.phone);
+      const linkedId = (o as { customerId?: string }).customerId || o.customer?.id;
+      const ownsIt = Boolean(sessionCustomerId) && linkedId === sessionCustomerId;
+      if (normalizedNumber) return matchesNumber && (matchesPhone || ownsIt);
+      return matchesPhone;
     });
 
     if (!order) {
-      return res.status(404).json({ error: 'No order found matching the provided search criteria.' });
+      // Deliberately identical whether the number or the phone was wrong: a
+      // different answer would confirm which order numbers exist.
+      return res.status(404).json({
+        success: false,
+        code: 'ORDER_NOT_FOUND',
+        error: 'No order matched that order number and mobile number.',
+        errorBn: 'এই অর্ডার নাম্বার ও মোবাইল নাম্বার দিয়ে কোনো অর্ডার পাওয়া যায়নি।',
+      });
     }
 
     return res.json({ success: true, order });
@@ -773,7 +1098,8 @@ async function startServer() {
   app.post('/api/orders/:id/status', async (req, res) => {
     try {
       const { id } = req.params;
-      const { status, note, operator } = req.body;
+      const { status, note } = req.body;
+      const operator = sessionOperatorOf(req.auth);
 
       if (!status) {
         return res.status(400).json({ error: 'Status is required' });
@@ -881,7 +1207,7 @@ async function startServer() {
           : {})
       });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return sendInternalError(res, err, '/api/orders/:id/status');
     }
   });
 
@@ -903,7 +1229,10 @@ async function startServer() {
         return res.status(404).json({ error: 'Order not found' });
       }
 
-      const session = await paymentService.initSslcommerz({
+      // Only a real gateway session is offered: when credentials are absent the
+      // shopper is told so, instead of being walked through a simulated screen
+      // whose output the old code treated as a completed payment.
+      const real = await paymentService.initSslcommerzReal({
         orderId: order.id,
         orderNumber: order.orderNumber,
         amount: order.total,
@@ -911,48 +1240,112 @@ async function startServer() {
         customerPhone: order.customer.phone,
         customerEmail: order.customer.email,
         address: order.shippingAddress.address,
-        city: order.shippingAddress.district
+        city: order.shippingAddress.district,
       });
+
+      if (real.ok !== true) {
+        const failure = real as { code: string; error: string };
+        return res.status(failure.code === 'PROVIDER_UNCONFIGURED' ? 503 : 400).json({
+          success: false,
+          code: failure.code,
+          error: failure.error,
+          errorBn: 'কার্ড পেমেন্ট এই সিস্টেমে চালু নেই। ক্যাশ অন ডেলিভারি বেছে নিন।',
+        });
+      }
+
+      const session = {
+        status: 'SUCCESS' as const,
+        sessionKey: real.sessionKey,
+        gatewayUrl: real.gatewayUrl,
+        orderNumber: order.orderNumber,
+        amount: order.total,
+      };
 
       return res.json({ success: true, session });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      return sendInternalError(res, err, '/api/payments/sslcommerz/init');
     }
   });
 
   app.post('/api/payments/sslcommerz/validate', async (req, res) => {
     try {
       const { val_id, tran_id, amount, card_type } = req.body;
-      const validation = await paymentService.validateTransaction(val_id, tran_id, Number(amount), card_type);
+      if (!val_id || !tran_id) {
+        return res.status(400).json({
+          success: false, code: 'MISSING_REFERENCE',
+          error: 'The gateway did not return a validation reference. Please retry from the payment page.',
+          errorBn: 'গেটওয়ে যাচাই কোড ফেরত দেয়নি। পেমেন্ট পেজ থেকে আবার চেষ্টা করুন।',
+        });
+      }
+      const validation = await paymentService.validateTransaction(String(val_id), String(tran_id), Number(amount), String(card_type || 'CARD'));
 
       if (validation.isValid) {
-        return res.json({ success: true, validation });
-      } else {
-        return res.status(400).json({ success: false, error: 'Payment verification failed' });
+        await persistence.flush();
+        return res.json({
+          success: true,
+          verified: true,
+          demoMode: Boolean(validation.verification?.demo),
+          mode: validation.verification?.state,
+          validation: validation.details,
+        });
       }
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        code: validation.verification?.reason || 'PAYMENT_NOT_VERIFIED',
+        demoMode: Boolean(validation.verification?.demo),
+        error: validation.details?.error || 'Payment verification failed',
+        errorBn: 'পেমেন্ট যাচাই করা যায়নি।',
+      });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      return sendInternalError(res, err, '/api/payments/sslcommerz/validate');
     }
   });
 
   // bKash Direct Checkout Routes
-  app.post('/api/payments/bkash/create', async (req, res) => {
+  app.post('/api/payments/bkash/create', async (req: Request, res: Response) => {
     try {
+      const caps = gatewayCapabilities();
+      if (caps.bkash === 'UNCONFIGURED' && !caps.demoPaymentsAllowed) {
+        return res.status(503).json({
+          success: false,
+          code: 'PROVIDER_UNCONFIGURED',
+          error: 'bKash checkout is not enabled on this deployment. Choose Cash on Delivery, or pay by Send Money and share the TrxID.',
+          errorBn: 'এই সিস্টেমে বিকাশ চেকআউট চালু নেই। ক্যাশ অন ডেলিভারি বাছাই করুন, অথবা Send Money করে TrxID দিন।',
+        });
+      }
       const { orderId } = req.body;
       const result = await paymentService.createBkashPayment(orderId);
-      return res.json({ success: true, data: result });
+      return res.json({ success: true, demoMode: caps.bkash === 'UNCONFIGURED', data: result });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return sendInternalError(res, err, '/api/payments/bkash/create');
     }
   });
 
-  app.post('/api/payments/bkash/execute', async (req, res) => {
+  app.post('/api/payments/bkash/execute', async (req: Request, res: Response) => {
     try {
       const { paymentID, orderNumber, amount } = req.body;
-      const result = await paymentService.executeBkashPayment(paymentID, orderNumber, Number(amount));
-      return res.json({ success: true, data: result });
+      if (!paymentID || !orderNumber) {
+        return res.status(400).json({ success: false, code: 'MISSING_PAYMENT_ID', error: 'A gateway payment id is required.' });
+      }
+      const result = await paymentService.executeBkashPayment(String(paymentID), String(orderNumber), Number(amount));
+      await persistence.flush();
+      const captured = result.statusCode === '0000' && Boolean(result.trxID);
+      return res.status(captured ? 200 : 400).json({
+        success: captured,
+        verified: captured,
+        demoMode: Boolean(result.demoMode),
+        code: captured ? undefined : result.statusCode === 'CFG01' ? 'PROVIDER_UNCONFIGURED' : 'PAYMENT_NOT_CAPTURED',
+        error: captured ? undefined : result.statusMessage,
+        errorBn: captured
+          ? undefined
+          : result.statusCode === 'CFG01'
+            ? 'বিকাশ গেটওয়ে এই সিস্টেমে চালু নেই—অর্ডারটি পেমেন্ট অপেক্ষমাণ রাখা হয়েছে।'
+            : 'পেমেন্ট সম্পন্ন হয়েছে এমন নিশ্চিত করা যায়নি।',
+        data: result,
+      });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return sendInternalError(res, err, '/api/payments/bkash/execute');
     }
   });
 
@@ -963,7 +1356,7 @@ async function startServer() {
       const result = await paymentService.initiateRefund(orderId, Number(amount), reason || 'Customer requested return');
       return res.json(result);
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return sendInternalError(res, err, '/api/payments/refund');
     }
   });
 
@@ -984,110 +1377,181 @@ async function startServer() {
   });
 
   // SSLCOMMERZ / bKash IPN Webhook Listener & Tester
-  app.post('/api/payments/ipn', (req, res) => {
-    const payload = req.body;
-    const isValid = paymentService.verifyIpnSignature(payload);
+  /**
+   * Gateway IPN / webhook receiver.
+   *
+   * Two rules the previous handler ignored:
+   *   1. The POST body is a claim, not a fact. It is now verified with the
+   *      gateway server-to-server (and/or an HMAC shared secret) before the
+   *      order state moves — otherwise `curl -d '{"tran_id":"KSH-1","status":"VALID"}'`
+   *      buys anything for free.
+   *   2. Idempotency. Gateways retry; a second delivery must not create a
+   *      second ledger row or double-settle the order.
+   */
+  app.post('/api/payments/ipn', async (req: Request, res: Response) => {
+    try {
+      const payload = (req.body || {}) as Record<string, unknown>;
+      const tranId = String(payload.tran_id || '').trim();
+      const valId = String(payload.val_id || '').trim();
+      const order = serverDb.getOrderByNumber(tranId);
 
-    if (!isValid) {
-      serverDb.addAuditLog('IPN_VERIFY_FAILED', 'Security', payload.tran_id || 'UNKNOWN', 'Invalid IPN signature payload received');
-      return res.status(400).send('IPN_SIGNATURE_INVALID');
-    }
+      if (!order) {
+        // Do not reveal which order numbers exist beyond a generic 404 body.
+        return res.status(404).send('IPN_ORDER_NOT_FOUND');
+      }
 
-    const order = serverDb.getOrderByNumber(payload.tran_id);
-    if (order && payload.status === 'VALID') {
+      // Already settled → acknowledge without touching state again.
+      if (order.paymentStatus === 'PAID' || order.paymentStatus === 'REFUNDED') {
+        return res.status(200).send('IPN_ALREADY_PROCESSED');
+      }
+
+      const signatureOk = paymentService.verifyIpnSignature(payload, req.headers['x-kisholoy-signature'] as string | undefined);
+      const amount = Number(payload.amount || order.total);
+      const gatewayCheck = await verifySslcommerz({ valId, tranId, expectedAmount: Number(order.total) });
+
+      if (!gatewayCheck.verified) {
+        serverDb.addAuditLog(
+          'IPN_REJECTED',
+          'Security',
+          tranId,
+          `IPN rejected (${gatewayCheck.reason || 'GATEWAY_REJECTED'}; signature ${signatureOk ? 'ok' : 'missing/invalid'}) from ${clientIpOf(req)}`
+        );
+        return res.status(400).send('IPN_VERIFICATION_FAILED');
+      }
+
+      const duplicate = serverDb.paymentTransactions.some((t) => t.orderNumber === order.orderNumber && t.status === 'VALID');
+      if (duplicate) {
+        return res.status(200).send('IPN_ALREADY_PROCESSED');
+      }
+
+      const feeDeducted = gatewayCheck.demo ? 0 : Number((amount * 0.025).toFixed(2));
       order.paymentStatus = 'PAID';
+      order.paymentGatewayMode = gatewayCheck.demo ? 'DEMO' : gatewayCheck.state;
       order.timeline.push({
         status: order.orderStatus,
         timestamp: new Date().toISOString(),
-        note: `Payment confirmed via IPN webhook from SSLCOMMERZ (Bank Tran ID: ${payload.bank_tran_id || 'N/A'})`,
-        updatedBy: 'IPN_LISTENER'
-      });
-
-      // Record transaction
-      serverDb.addPaymentTransaction({
-        id: `ptx-${Date.now()}`,
-        orderNumber: order.orderNumber,
-        gateway: 'SSLCOMMERZ',
-        amount: order.total,
-        currency: 'BDT',
-        transactionId: `SSL-${payload.val_id || Date.now()}`,
-        bankTranId: payload.bank_tran_id,
-        valId: payload.val_id,
-        cardType: payload.card_type || 'VISA-CITY-BANK',
-        status: 'VALID',
-        riskLevel: 'LOW',
-        feeDeducted: Number((order.total * 0.025).toFixed(2)),
-        netDisbursed: Number((order.total * 0.975).toFixed(2)),
-        settledAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        rawIpnPayload: payload
-      });
-
-      serverDb.addAuditLog('IPN_PAYMENT_CONFIRMED', 'Payment', order.orderNumber, `IPN confirmed payment of ৳${order.total}`);
-    }
-
-    return res.status(200).send('IPN_PROCESSED_SUCCESSFULLY');
-  });
-
-  // IPN Test Simulator (For Admin testing)
-  app.post('/api/payments/test-ipn', (req, res) => {
-    const { orderNumber, status, amount, cardType } = req.body;
-    const order = serverDb.getOrderByNumber(orderNumber);
-    if (!order) {
-      return res.status(404).json({ success: false, error: 'Order not found' });
-    }
-
-    const mockValId = `VAL_TEST_${Date.now()}`;
-    const mockBankTran = `BNK_SIM_${Math.floor(100000 + Math.random() * 900000)}`;
-
-    if (status === 'VALID') {
-      order.paymentStatus = 'PAID';
-      order.timeline.push({
-        status: order.orderStatus,
-        timestamp: new Date().toISOString(),
-        note: `Simulated IPN webhook verified successfully (Bank Tran: ${mockBankTran})`,
-        updatedBy: 'ADMIN_IPN_TESTER'
+        note: `Payment confirmed via gateway IPN (Bank Tran: ${gatewayCheck.bankTranId || 'N/A'})${gatewayCheck.demo ? ' [DEMO MODE — not a real capture]' : ''}`,
+        updatedBy: 'IPN_LISTENER',
       });
 
       serverDb.addPaymentTransaction({
         id: `ptx-${Date.now()}`,
         orderNumber: order.orderNumber,
         gateway: 'SSLCOMMERZ',
-        amount: order.total,
+        amount,
         currency: 'BDT',
-        transactionId: `SSL-${mockValId}`,
-        bankTranId: mockBankTran,
-        valId: mockValId,
-        cardType: cardType || 'VISA-EBL-GATEWAY',
+        transactionId: `SSL-${gatewayCheck.providerRef || valId || Date.now()}`,
+        bankTranId: gatewayCheck.bankTranId,
+        valId,
+        cardType: gatewayCheck.cardType || String(payload.card_type || 'CARD'),
         status: 'VALID',
         riskLevel: 'LOW',
-        feeDeducted: Number((order.total * 0.025).toFixed(2)),
-        netDisbursed: Number((order.total * 0.975).toFixed(2)),
+        feeDeducted,
+        netDisbursed: Number((amount - feeDeducted).toFixed(2)),
         settledAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
-        rawIpnPayload: {
-          tran_id: orderNumber,
-          val_id: mockValId,
-          amount: String(order.total),
-          status: 'VALID',
-          bank_tran_id: mockBankTran
-        }
+        rawIpnPayload: payload,
       });
 
       serverDb.addAuditLog(
-        'IPN_TEST_TRIGGERED',
+        'IPN_PAYMENT_CONFIRMED',
         'Payment',
         order.orderNumber,
-        `Admin dispatched mock IPN payment confirmation for ৳${order.total}`
+        `IPN confirmed payment of ৳${amount}${gatewayCheck.demo ? ' (DEMO)' : ''}`
       );
-    }
+      serverDb.syncCollection('orders');
+      await persistence.flush();
 
-    return res.json({
+      return res.status(200).send('IPN_PROCESSED_SUCCESSFULLY');
+    } catch (err) {
+      return sendInternalError(res, err, '/api/payments/ipn');
+    }
+  });
+
+  /**
+   * Manual payment claim (bKash/Nagad Send Money).
+   *
+   * The shopper records the TrxID they sent; this NEVER marks the order paid.
+   * It stores the claim, flags the order for finance verification, and lets the
+   * existing `/api/payments/verify-manual` style admin action confirm it after
+   * a human checks the statement. A customer-supplied string is not evidence of
+   * money arriving.
+   */
+  app.post('/api/payments/manual-claim', async (req: Request, res: Response) => {
+    try {
+      const orderNumber = String(req.body?.orderNumber || '').trim().slice(0, 40);
+      const reference = String(req.body?.reference || '').trim().slice(0, 60);
+      const method = String(req.body?.method || 'BKASH').toUpperCase().slice(0, 20);
+      const claimedAmount = Number(req.body?.amount);
+
+      if (!orderNumber || !reference) {
+        return res.status(400).json({
+          success: false, code: 'MISSING_REFERENCE',
+          error: 'Order number and transaction reference are required.',
+          errorBn: 'অর্ডার নম্বর ও লেনদেন রেফারেন্স প্রয়োজন।',
+        });
+      }
+
+      const order = serverDb.getOrderByNumber(orderNumber);
+      if (!order) {
+        return res.status(404).json({ success: false, error: 'Order not found.', errorBn: 'অর্ডারটি পাওয়া যায়নি।' });
+      }
+      if (order.paymentStatus === 'PAID') {
+        return res.json({ success: true, alreadyVerified: true, message: 'This order is already paid.' });
+      }
+
+      // `PENDING` is the honest existing state for "money claimed, not seen".
+      order.paymentStatus = 'PENDING';
+      order.manualPaymentClaim = {
+        method: method as 'BKASH',
+        reference,
+        claimedAmount: Number.isFinite(claimedAmount) ? claimedAmount : order.total,
+        submittedAt: new Date().toISOString(),
+        verified: false,
+      };
+      order.timeline.push({
+        status: order.orderStatus,
+        timestamp: new Date().toISOString(),
+        note: `Manual ${method} payment claimed by customer (TrxID ${reference}) — awaiting finance verification.`,
+        updatedBy: 'CUSTOMER_CLAIM',
+      });
+      serverDb.syncCollection('orders');
+      void persistence.upsertOne('orders', order as unknown as object, 'id');
+      serverDb.addAuditLog(
+        'MANUAL_PAYMENT_CLAIMED', 'Payment', order.orderNumber,
+        `Customer submitted ${method} TrxID ${reference} for ৳${order.total}; pending verification.`
+      );
+      await persistence.flush();
+
+      return res.status(202).json({
+        success: true,
+        verified: false,
+        paymentStatus: 'PENDING',
+        verification: 'pending',
+        message: 'Thank you. Our finance desk will verify the transaction and confirm your order.',
+        messageBn: 'ধন্যবাদ। আমাদের ফাইন্যান্স টিম লেনদেন যাচাই করে অর্ডার নিশ্চিত করবে।',
+      });
+    } catch (err) {
+      return sendInternalError(res, err, '/api/payments/manual-claim');
+    }
+  });
+
+  /** Public payment capability probe so the UI never promises a rail that is off. */
+  app.get('/api/payments/capabilities', (_req: Request, res: Response) => {
+    const caps = gatewayCapabilities();
+    res.json({
       success: true,
-      message: `IPN test event processed for order ${orderNumber}`,
-      order
+      capabilities: caps,
+      manualPayment: {
+        available: true,
+        instructionsBn: 'বিকাশ/নগদে Send Money করে লেনদেনের ট্রানজেকশন আইডি (TrxID) আমাদের জানাতে হবে। যাচাই হলে অর্ডার নিশ্চিত হবে।',
+        instructions: 'Send Money to our merchant number via bKash/Nagad, then share the TrxID. The order is confirmed once a staff member verifies it.',
+      },
     });
   });
+
+
+
 
   // -------------------------------------------------------------
   // 6. Courier & Logistics (Steadfast & Pathao APIs)
@@ -1097,7 +1561,7 @@ async function startServer() {
       const config = courierService.getCourierConfigStatus();
       return res.json({ success: true, config });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      return sendInternalError(res, err, '/api/courier/config');
     }
   });
 
@@ -1149,7 +1613,7 @@ async function startServer() {
         order: serverDb.getOrderById(orderId)
       });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      return sendInternalError(res, err, '/api/courier/book');
     }
   });
 
@@ -1161,7 +1625,7 @@ async function startServer() {
       }
       return res.json({ success: true, tracking });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      return sendInternalError(res, err, '/api/courier/track/:id');
     }
   });
 
@@ -1207,7 +1671,7 @@ async function startServer() {
       const result = await queueService.runWorkerTick(limit);
       res.json({ success: true, ...result, stats: queueService.getQueueStats() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/operations/worker/tick');
     }
   });
 
@@ -1224,7 +1688,7 @@ async function startServer() {
       const result = await queueService.replayAllDlq();
       res.json({ success: true, ...result, stats: queueService.getQueueStats() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/operations/dlq/replay-all');
     }
   });
 
@@ -1233,7 +1697,7 @@ async function startServer() {
       const result = queueService.purgeDlq();
       res.json({ success: true, ...result, stats: queueService.getQueueStats() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/operations/dlq/purge');
     }
   });
 
@@ -1250,7 +1714,16 @@ async function startServer() {
     const endpoint = serverDb.addWebhookEndpoint({
       name: name.trim(),
       url: url.trim(),
-      secret: secret?.trim() || `whsec_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`,
+      /**
+       * A webhook secret from `Math.random()` is a PRNG output with a short
+       * base36 tail: predictable enough that someone who knows roughly when the
+       * endpoint was created can forge signed deliveries. CSPRNG here, and a
+       * caller-supplied secret shorter than 32 chars is not a secret.
+       */
+      secret: (() => {
+        const provided = String(secret?.trim() || '');
+        return provided.length >= 32 ? provided : `whsec_${randomBytes(32).toString('base64url')}`;
+      })(),
       events: events && events.length > 0 ? events : ['order.created', 'order.paid'],
       status: status || 'ACTIVE'
     });
@@ -1288,7 +1761,7 @@ async function startServer() {
       }
       res.json({ success: true, log });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/webhooks/test-ping');
     }
   });
 
@@ -1351,7 +1824,7 @@ async function startServer() {
 
       res.json({ success: true, log, balance: serverDb.gatewayConfig.smsBalanceBdt });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/notifications/dispatch');
     }
   });
 
@@ -1365,7 +1838,7 @@ async function startServer() {
       const logs = await notificationService.dispatchAutomatedEvent(eventKey, data || {});
       res.json({ success: true, dispatchedLogs: logs, count: logs.length });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/notifications/dispatch-event');
     }
   });
 
@@ -1386,7 +1859,7 @@ async function startServer() {
       const result = await notificationService.testGatewayConnection(channel || 'SMS', provider || 'GREENWEB');
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/notifications/test-connection');
     }
   });
 
@@ -1434,7 +1907,7 @@ async function startServer() {
       queueService.enqueue('SMS_DISPATCH', `Dispatched SMS to ${payload.recipient}`, { priority: 'NORMAL' });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/notifications/sms/send');
     }
   });
 
@@ -1446,7 +1919,7 @@ async function startServer() {
       const stats = serverDb.getInventoryStats();
       res.json({ success: true, stats });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/inventory/stats');
     }
   });
 
@@ -1456,13 +1929,14 @@ async function startServer() {
       const transactions = serverDb.getInventoryTransactions({ sku, type, operator });
       res.json({ success: true, transactions });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/inventory/transactions');
     }
   });
 
   app.post('/api/inventory/adjust', (req, res) => {
     try {
-      const { productId, quantityChange, reason, operator, warehouseLocation, batchNumber, notes, unitCost } = req.body;
+      const { productId, quantityChange, reason, warehouseLocation, batchNumber, notes, unitCost } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       
       if (!productId) {
         return res.status(400).json({ error: 'Product SKU or ID is required' });
@@ -1496,13 +1970,14 @@ async function startServer() {
         stats: serverDb.getInventoryStats()
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/inventory/adjust');
     }
   });
 
   app.post('/api/inventory/batch-restock', (req, res) => {
     try {
-      const { supplier, invoiceNumber, warehouseLocation, items, notes, operator } = req.body;
+      const { supplier, invoiceNumber, warehouseLocation, items, notes } = req.body;
+      const operator = sessionOperatorOf(req.auth);
 
       if (!supplier || !supplier.trim()) {
         return res.status(400).json({ error: 'Supplier or artisan cooperative name is required' });
@@ -1529,7 +2004,7 @@ async function startServer() {
         stats: serverDb.getInventoryStats()
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/inventory/batch-restock');
     }
   });
 
@@ -1558,7 +2033,7 @@ async function startServer() {
         rows
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/inventory/export');
     }
   });
 
@@ -1713,7 +2188,7 @@ async function startServer() {
 
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/admin/refunds/process');
     }
   });
 
@@ -1725,7 +2200,7 @@ async function startServer() {
       const summary = calculateFinancialSummary();
       res.json({ success: true, summary });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/finance/summary');
     }
   });
 
@@ -1821,7 +2296,7 @@ async function startServer() {
       const scanResult = performReconciliationScan();
       res.json({ success: true, ...scanResult });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/finance/reconciliation');
     }
   });
 
@@ -1836,7 +2311,7 @@ async function startServer() {
       const report = reportService.getAnalyticsReport(range, from, to);
       res.json({ success: true, ...report });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/analytics');
     }
   });
 
@@ -1850,7 +2325,7 @@ async function startServer() {
       }
       res.json({ success: true, districts: list });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/districts');
     }
   });
 
@@ -1860,7 +2335,7 @@ async function startServer() {
       const report = reportService.getAnalyticsReport(range);
       res.json({ success: true, financialPnl: report.financialPnl, kpis: report.kpis });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/financial-pnl');
     }
   });
 
@@ -1869,7 +2344,7 @@ async function startServer() {
       const report = reportService.getAnalyticsReport('ALL');
       res.json({ success: true, inventoryVelocity: report.inventoryVelocityMetrics });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/inventory-health');
     }
   });
 
@@ -1878,7 +2353,7 @@ async function startServer() {
       const report = reportService.getAnalyticsReport('ALL');
       res.json({ success: true, customerCohorts: report.customerCohorts });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/customer-cohorts');
     }
   });
 
@@ -1891,7 +2366,7 @@ async function startServer() {
       }
       res.json({ success: true, invoice: invoiceData });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/documents/invoice/:orderNumber');
     }
   });
 
@@ -1901,7 +2376,7 @@ async function startServer() {
       const manifest = reportService.generateCourierManifest(provider);
       res.json({ success: true, manifest });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/documents/manifest');
     }
   });
 
@@ -1916,7 +2391,7 @@ async function startServer() {
       res.setHeader('Content-Disposition', `attachment; filename="Kisholoy_${type}_${Date.now()}.csv"`);
       res.send(csvData);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/reports/export/:type');
     }
   });
 
@@ -1927,7 +2402,7 @@ async function startServer() {
     try {
       res.json({ success: true, settings: getPrintSettings() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/settings');
     }
   });
 
@@ -1936,7 +2411,7 @@ async function startServer() {
       const settings = savePrintSettings(req.body || {});
       res.json({ success: true, settings });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/settings');
     }
   });
 
@@ -1945,7 +2420,7 @@ async function startServer() {
       const settings = resetPrintSettings();
       res.json({ success: true, settings });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/settings/reset');
     }
   });
 
@@ -1969,7 +2444,7 @@ async function startServer() {
       };
       res.json({ success: true, payload });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/order/:orderNumber');
     }
   });
 
@@ -1982,7 +2457,7 @@ async function startServer() {
       for (const key of Object.keys(qrs)) qrMap[key] = (await generateQr(String(qrs[key]))) || '';
       res.json({ success: true, codes: { barcodes: barcodeMap, qrs: qrMap } });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/codes');
     }
   });
 
@@ -1997,7 +2472,7 @@ async function startServer() {
       if (!result.success) return res.status(404).json({ error: result.error });
       res.json({ success: true, payload: result.payload });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/supplier-statement/:supplierId');
     }
   });
 
@@ -2007,7 +2482,7 @@ async function startServer() {
       if (!result.success) return res.status(404).json({ error: result.error });
       res.json({ success: true, payload: result.payload });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/purchase-order/:poId');
     }
   });
 
@@ -2016,7 +2491,7 @@ async function startServer() {
       const pos = supplierEngine.getAllPurchaseOrders();
       res.json({ success: true, pos });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/purchase-orders/all');
     }
   });
 
@@ -2026,7 +2501,7 @@ async function startServer() {
       if (!result.success) return res.status(404).json({ error: result.error });
       res.json({ success: true, payload: result.payload });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/return-refund/:returnId');
     }
   });
 
@@ -2039,7 +2514,7 @@ async function startServer() {
       if (!result.success) return res.status(404).json({ error: result.error });
       res.json({ success: true, payload: result.payload });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/report');
     }
   });
 
@@ -2067,7 +2542,7 @@ async function startServer() {
       }
       res.json({ success: true, payloads: results });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/print/bulk');
     }
   });
 
@@ -2079,14 +2554,15 @@ async function startServer() {
       const content = serverDb.getContent();
       res.json({ success: true, content });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content');
     }
   });
 
   app.put('/api/content', (req, res) => {
     try {
       const payload = req.body.content || req.body;
-      const { operator, summary } = req.body;
+      const { summary } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) {
         return res.status(400).json({ error: 'Content payload is required' });
       }
@@ -2097,14 +2573,15 @@ async function startServer() {
       );
       res.json({ success: true, content: result.content, revision: result.revision });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content');
     }
   });
 
   app.post('/api/content/publish', (req, res) => {
     try {
       const payload = req.body.content || req.body;
-      const { operator, summary } = req.body;
+      const { summary } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) {
         return res.status(400).json({ error: 'Content payload is required' });
       }
@@ -2115,7 +2592,7 @@ async function startServer() {
       );
       res.json({ success: true, content: result.content, revision: result.revision });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content/publish');
     }
   });
 
@@ -2124,21 +2601,22 @@ async function startServer() {
       const revisions = serverDb.getContentRevisions();
       res.json({ success: true, revisions });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content/revisions');
     }
   });
 
   app.post('/api/content/restore/:revisionId', (req, res) => {
     try {
       const { revisionId } = req.params;
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const restored = serverDb.restoreContentRevision(revisionId, operator || 'SUPER_ADMIN');
       if (!restored) {
         return res.status(404).json({ error: 'Content revision not found' });
       }
       res.json({ success: true, content: restored, message: `Successfully restored revision ${revisionId}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content/restore/:revisionId');
     }
   });
 
@@ -2171,14 +2649,15 @@ async function startServer() {
       serverDb.addAuditLog('UPLOAD_MEDIA_ASSET', 'ContentCMS', assetRecord.assetId, `Uploaded media asset: ${assetRecord.name}`);
       res.json({ success: true, asset: assetRecord });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/content/upload-image');
     }
   });
 
   // Centralized Brand Logo Management API (Universal Global Update)
   app.post('/api/brand/logo', (req, res) => {
     try {
-      const { logoUrl, logoDarkUrl, logoHeight, logoType, logoEmblemStyle, operator, summary } = req.body;
+      const { logoUrl, logoDarkUrl, logoHeight, logoType, logoEmblemStyle, summary } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!logoUrl) {
         return res.status(400).json({ error: 'logoUrl is required' });
       }
@@ -2199,7 +2678,7 @@ async function startServer() {
       serverDb.addAuditLog('UPDATE_BRAND_LOGO', 'BrandIdentity', 'GlobalLogo', sum, op);
       res.json({ success: true, content: result.content, revision: result.revision, message: 'Brand logo updated globally' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/brand/logo');
     }
   });
 
@@ -2222,7 +2701,7 @@ async function startServer() {
       serverDb.addAuditLog('RESET_BRAND_LOGO', 'BrandIdentity', 'GlobalLogo', 'Reset to official vector logo', op);
       res.json({ success: true, content: result.content, revision: result.revision, message: 'Reset to official logo' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/brand/logo/reset');
     }
   });
 
@@ -2258,7 +2737,7 @@ async function startServer() {
       const stats = fraudEngine.getFraudStats();
       res.json({ success: true, stats });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/stats');
     }
   });
 
@@ -2266,7 +2745,7 @@ async function startServer() {
     try {
       res.json({ success: true, blacklists: serverDb.blacklists });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/blacklists');
     }
   });
 
@@ -2285,35 +2764,37 @@ async function startServer() {
       });
       res.status(201).json({ success: true, entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/blacklists');
     }
   });
 
   app.delete('/api/fraud/blacklists/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const { operator } = req.body || {};
+
+      const operator = sessionOperatorOf(req.auth);
       const deleted = serverDb.deleteBlacklistEntry(id, operator || 'SUPER_ADMIN');
       if (!deleted) {
         return res.status(404).json({ error: 'Blacklist entry not found' });
       }
       res.json({ success: true, message: 'Blacklist entry removed' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/blacklists/:id');
     }
   });
 
   app.post('/api/fraud/blacklists/:id/toggle', (req, res) => {
     try {
       const { id } = req.params;
-      const { operator } = req.body || {};
+
+      const operator = sessionOperatorOf(req.auth);
       const updated = serverDb.toggleBlacklistStatus(id, operator || 'SUPER_ADMIN');
       if (!updated) {
         return res.status(404).json({ error: 'Blacklist entry not found' });
       }
       res.json({ success: true, entry: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/blacklists/:id/toggle');
     }
   });
 
@@ -2321,20 +2802,21 @@ async function startServer() {
     try {
       res.json({ success: true, settings: serverDb.fraudSettings });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/settings');
     }
   });
 
   app.post('/api/fraud/settings', (req, res) => {
     try {
-      const { settings, operator } = req.body;
+      const { settings } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!settings) {
         return res.status(400).json({ error: 'Settings payload is required' });
       }
       const updated = serverDb.updateFraudSettings(settings, operator || 'SUPER_ADMIN');
       res.json({ success: true, settings: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/settings');
     }
   });
 
@@ -2358,13 +2840,14 @@ async function startServer() {
       });
       res.json({ success: true, assessment });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/evaluate');
     }
   });
 
   app.post('/api/fraud/verify-order', (req, res) => {
     try {
-      const { orderId, action, notes, operator, advanceTrxId, advanceAmount, addToBlacklist, blacklistReason } = req.body;
+      const { orderId, action, notes, advanceTrxId, advanceAmount, addToBlacklist, blacklistReason } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!orderId || !action) {
         return res.status(400).json({ error: 'Order ID and action are required' });
       }
@@ -2383,7 +2866,7 @@ async function startServer() {
       }
       res.json({ success: true, order: result.order });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fraud/verify-order');
     }
   });
 
@@ -2396,7 +2879,7 @@ async function startServer() {
     try {
       res.json({ success: true, warehouses: fulfillmentEngine.getWarehouses() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/warehouses');
     }
   });
 
@@ -2410,7 +2893,7 @@ async function startServer() {
       const saved = fulfillmentEngine.saveWarehouse(warehouseData);
       res.status(201).json({ success: true, warehouse: saved });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/warehouses');
     }
   });
 
@@ -2418,14 +2901,15 @@ async function startServer() {
   app.post('/api/warehouses/:id/toggle', (req, res) => {
     try {
       const { id } = req.params;
-      const { active, operator } = req.body;
+      const { active } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const success = fulfillmentEngine.toggleWarehouse(id, Boolean(active), operator || 'SUPER_ADMIN');
       if (!success) {
         return res.status(404).json({ error: 'Warehouse hub not found' });
       }
       res.json({ success: true, warehouse: fulfillmentEngine.getWarehouseById(id) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/warehouses/:id/toggle');
     }
   });
 
@@ -2436,14 +2920,15 @@ async function startServer() {
       const matrix = fulfillmentEngine.getWarehouseStocks(warehouseId, productId);
       res.json({ success: true, matrix });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/warehouses/stock-matrix');
     }
   });
 
   // Update Aisle/Shelf/Bin Coordinates for an item
   app.post('/api/warehouses/stock-matrix/bin', (req, res) => {
     try {
-      const { stockId, aisle, shelf, bin, reorderLevel, reorderQuantity, operator } = req.body;
+      const { stockId, aisle, shelf, bin, reorderLevel, reorderQuantity } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!stockId || !aisle || !shelf || !bin) {
         return res.status(400).json({ error: 'stockId, aisle, shelf, and bin coordinates are required.' });
       }
@@ -2461,7 +2946,7 @@ async function startServer() {
       }
       res.json({ success: true, item: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/warehouses/stock-matrix/bin');
     }
   });
 
@@ -2470,7 +2955,7 @@ async function startServer() {
     try {
       res.json({ success: true, transfers: fulfillmentEngine.getStockTransfers() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/transfers');
     }
   });
 
@@ -2494,7 +2979,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, transfer });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/transfers');
     }
   });
 
@@ -2509,7 +2994,7 @@ async function startServer() {
       }
       res.json({ success: true, transfer: approved });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/transfers/:id/approve');
     }
   });
 
@@ -2517,7 +3002,8 @@ async function startServer() {
   app.post('/api/fulfillment/transfers/:id/dispatch', (req, res) => {
     try {
       const { id } = req.params;
-      const { trackingOrGatePass, carrier, operator } = req.body;
+      const { trackingOrGatePass, carrier } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const dispatched = fulfillmentEngine.dispatchStockTransfer({
         transferId: id,
         trackingOrGatePass,
@@ -2529,7 +3015,7 @@ async function startServer() {
       }
       res.json({ success: true, transfer: dispatched });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/transfers/:id/dispatch');
     }
   });
 
@@ -2548,7 +3034,7 @@ async function startServer() {
       }
       res.json({ success: true, transfer: received });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/transfers/:id/receive');
     }
   });
 
@@ -2566,7 +3052,7 @@ async function startServer() {
       const decision = fulfillmentEngine.routeOrder(targetOrder);
       res.json({ success: true, decision, order: targetOrder });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/route-order');
     }
   });
 
@@ -2575,7 +3061,7 @@ async function startServer() {
     try {
       res.json({ success: true, pickLists: fulfillmentEngine.getPickLists() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/pick-lists');
     }
   });
 
@@ -2593,7 +3079,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, pickList });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/pick-lists');
     }
   });
 
@@ -2611,7 +3097,7 @@ async function startServer() {
       }
       res.json({ success: true, pickList: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/pick-lists/:id/toggle-item');
     }
   });
 
@@ -2620,14 +3106,15 @@ async function startServer() {
     try {
       res.json({ success: true, manifests: fulfillmentEngine.getDispatchManifests() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/manifests');
     }
   });
 
   // Generate Courier Dispatch Manifest
   app.post('/api/fulfillment/manifests', (req, res) => {
     try {
-      const { warehouseId, courier, orderIds, driverName, driverPhone, vehicleNumber, operator } = req.body;
+      const { warehouseId, courier, orderIds, driverName, driverPhone, vehicleNumber } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!warehouseId || !courier || !orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
         return res.status(400).json({ error: 'warehouseId, courier, and orderIds are required.' });
       }
@@ -2642,7 +3129,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, manifest });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/manifests');
     }
   });
 
@@ -2650,14 +3137,15 @@ async function startServer() {
   app.post('/api/fulfillment/manifests/:id/handover', (req, res) => {
     try {
       const { id } = req.params;
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const manifest = fulfillmentEngine.handoverManifest(id, operator || 'SUPER_ADMIN');
       if (!manifest) {
         return res.status(404).json({ error: 'Manifest not found.' });
       }
       res.json({ success: true, manifest });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/fulfillment/manifests/:id/handover');
     }
   });
 
@@ -2684,7 +3172,7 @@ async function startServer() {
 
       res.json({ success: true, evaluation });
     } catch (e: any) {
-      res.status(500).json({ valid: false, error: e.message });
+      res.status(500).json({ valid: false, error: 'Session verification is unavailable right now.', errorBn: 'সেশন যাচাই এখন করা যাচ্ছে না।' });
     }
   });
 
@@ -2697,7 +3185,7 @@ async function startServer() {
         stats: promotionEngine.getSystemPromotionStats()
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/coupons');
     }
   });
 
@@ -2742,7 +3230,7 @@ async function startServer() {
 
       res.status(201).json({ success: true, coupon });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/coupons');
     }
   });
 
@@ -2750,14 +3238,15 @@ async function startServer() {
   app.put('/api/promotions/coupons/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const { operator, ...updates } = req.body;
+      const { operator: _ignoredBodyOperator, ...updates } = req.body; // operator must not be persisted from the body
+      const operator = sessionOperatorOf(req.auth);
       const updated = serverDb.updateCoupon(id, updates, operator || 'OPERATOR');
       if (!updated) {
         return res.status(404).json({ error: 'Coupon not found.' });
       }
       res.json({ success: true, coupon: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/coupons/:id');
     }
   });
 
@@ -2765,14 +3254,15 @@ async function startServer() {
   app.delete('/api/promotions/coupons/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const deleted = serverDb.deleteCoupon(id, operator || 'OPERATOR');
       if (!deleted) {
         return res.status(404).json({ error: 'Coupon not found.' });
       }
       res.json({ success: true, message: 'Coupon deleted successfully.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/coupons/:id');
     }
   });
 
@@ -2781,7 +3271,7 @@ async function startServer() {
     try {
       res.json({ success: true, flashDeals: serverDb.flashDeals });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/flash-deals');
     }
   });
 
@@ -2807,7 +3297,7 @@ async function startServer() {
       serverDb.addAuditLog('CREATE_FLASH_DEAL', 'PromotionsEngine', newDeal.id, `Created flash deal ${newDeal.title}`);
       res.status(201).json({ success: true, flashDeal: newDeal });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/flash-deals');
     }
   });
 
@@ -2820,13 +3310,14 @@ async function startServer() {
         stats: promotionEngine.getSystemPromotionStats()
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/flash-deals');
     }
   });
 
   app.post('/api/promotions/loyalty/adjust', (req, res) => {
     try {
-      const { phone, points, type, note, operator } = req.body;
+      const { phone, points, type, note } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!phone || points === undefined || !note) {
         return res.status(400).json({ error: 'Phone, points, and note are required.' });
       }
@@ -2845,7 +3336,7 @@ async function startServer() {
 
       res.json({ success: true, wallet: updatedWallet });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/loyalty/adjust');
     }
   });
 
@@ -2854,7 +3345,7 @@ async function startServer() {
     try {
       res.json({ success: true, stats: promotionEngine.getSystemPromotionStats() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/promotions/stats');
     }
   });
 
@@ -2871,7 +3362,7 @@ async function startServer() {
       }
       res.json({ success: true, profile });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/profile/:customerId');
     }
   });
 
@@ -2883,7 +3374,7 @@ async function startServer() {
       }
       res.json({ success: true, profile: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/profile/:customerId');
     }
   });
 
@@ -2893,7 +3384,7 @@ async function startServer() {
       const addresses = serverDb.getCustomerAddresses(req.params.customerId);
       res.json({ success: true, addresses });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/addresses/:customerId');
     }
   });
 
@@ -2919,7 +3410,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, address: newAddress });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/addresses');
     }
   });
 
@@ -2933,7 +3424,7 @@ async function startServer() {
       }
       res.json({ success: true, address: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/addresses/:addressId');
     }
   });
 
@@ -2949,7 +3440,7 @@ async function startServer() {
       }
       res.json({ success: true, message: 'Address deleted successfully' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/addresses/:addressId');
     }
   });
 
@@ -2959,7 +3450,7 @@ async function startServer() {
       const wishlist = serverDb.getWishlist(req.params.customerId);
       res.json({ success: true, wishlist });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/wishlist/:customerId');
     }
   });
 
@@ -2973,7 +3464,7 @@ async function startServer() {
       const updatedList = serverDb.getWishlist(customerId);
       res.json({ success: true, action: result.action, item: result.item, wishlist: updatedList });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/wishlist/toggle');
     }
   });
 
@@ -2983,7 +3474,7 @@ async function startServer() {
       const returns = serverDb.getCustomerReturnRequests(req.params.customerId);
       res.json({ success: true, returns });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/returns/:customerId');
     }
   });
 
@@ -3008,7 +3499,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, returnRequest: newReturn });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customer/returns');
     }
   });
 
@@ -3022,7 +3513,7 @@ async function startServer() {
       const data = marketingService.calculateRfmScores();
       res.json({ success: true, ...data });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/rfm-segments');
     }
   });
 
@@ -3047,7 +3538,7 @@ async function startServer() {
 
       res.json({ success: true, customers: filtered, summaries, total: filtered.length });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/customers-crm');
     }
   });
 
@@ -3059,7 +3550,7 @@ async function startServer() {
       }
       res.json({ success: true, details });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/customers-crm/:id');
     }
   });
 
@@ -3072,7 +3563,7 @@ async function startServer() {
       const note = marketingService.addCrmNote(req.params.id, text.trim(), author || 'Staff');
       res.status(201).json({ success: true, note });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/customers-crm/:id/notes');
     }
   });
 
@@ -3085,7 +3576,7 @@ async function startServer() {
       const tags = marketingService.toggleCustomerTag(req.params.id, tag.trim().toUpperCase());
       res.json({ success: true, tags });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/customers-crm/:id/tags');
     }
   });
 
@@ -3177,7 +3668,7 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers');
     }
   });
 
@@ -3202,14 +3693,15 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers/:id');
     }
   });
 
   app.patch('/api/customers/:id/status', (req, res) => {
     try {
       const { id } = req.params;
-      const { status, reason, operator } = req.body;
+      const { status, reason } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!status || !['ACTIVE', 'BLOCKED'].includes(status)) {
         return res.status(400).json({ error: 'Valid status (ACTIVE or BLOCKED) is required' });
       }
@@ -3227,7 +3719,7 @@ async function startServer() {
       );
       res.json({ success: true, customer });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers/:id/status');
     }
   });
 
@@ -3258,7 +3750,7 @@ async function startServer() {
       );
       res.status(201).json({ success: true, customer: newCustomer });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers');
     }
   });
 
@@ -3271,7 +3763,7 @@ async function startServer() {
       const note = marketingService.addCrmNote(req.params.id, text.trim(), author || 'Staff');
       res.status(201).json({ success: true, note });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers/:id/notes');
     }
   });
 
@@ -3284,13 +3776,14 @@ async function startServer() {
       const tags = marketingService.toggleCustomerTag(req.params.id, tag.trim().toUpperCase());
       res.json({ success: true, tags });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers/:id/tags');
     }
   });
 
   app.post('/api/customers/:id/quick-communication', (req, res) => {
     try {
-      const { channel, message, operator } = req.body;
+      const { channel, message } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const customer = serverDb.customers.find(c => c.id === req.params.id);
       if (!customer) {
         return res.status(404).json({ error: 'Customer not found' });
@@ -3303,7 +3796,7 @@ async function startServer() {
       );
       res.json({ success: true, message: `Communication recorded and logged for ${customer.name}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/customers/:id/quick-communication');
     }
   });
 
@@ -3329,7 +3822,7 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/abandoned-carts');
     }
   });
 
@@ -3347,7 +3840,7 @@ async function startServer() {
       }
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/abandoned-carts/:id/recover');
     }
   });
 
@@ -3369,7 +3862,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, cart });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/abandoned-carts/simulate');
     }
   });
 
@@ -3393,7 +3886,7 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/campaigns');
     }
   });
 
@@ -3419,7 +3912,7 @@ async function startServer() {
       });
       res.status(201).json({ success: true, campaign });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/campaigns');
     }
   });
 
@@ -3431,7 +3924,7 @@ async function startServer() {
       }
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/campaigns/:id/dispatch');
     }
   });
 
@@ -3482,7 +3975,7 @@ async function startServer() {
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/referrals');
     }
   });
 
@@ -3490,7 +3983,7 @@ async function startServer() {
     try {
       res.json({ success: true, config: marketingService.getReferralConfig() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/referrals/config');
     }
   });
 
@@ -3499,7 +3992,7 @@ async function startServer() {
       const updated = marketingService.updateReferralConfig(req.body);
       res.json({ success: true, config: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/referrals/config');
     }
   });
 
@@ -3511,7 +4004,7 @@ async function startServer() {
       }
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/referrals/disburse/:id');
     }
   });
 
@@ -3534,7 +4027,7 @@ async function startServer() {
       const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
       res.json({ success: true, channels: marketingCommandCenter.listChannels(includeArchived) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/channels');
     }
   });
 
@@ -3545,7 +4038,7 @@ async function startServer() {
       const channel = marketingCommandCenter.createChannel(parsed.data);
       res.status(201).json({ success: true, channel });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/channels');
     }
   });
 
@@ -3558,7 +4051,7 @@ async function startServer() {
       if (!channel) return res.status(404).json({ error: 'Channel not found' });
       res.json({ success: true, channel });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/channels/:id');
     }
   });
 
@@ -3570,7 +4063,7 @@ async function startServer() {
       if (!channel) return res.status(404).json({ error: 'Channel not found' });
       res.json({ success: true, channel });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/channels/:id/status');
     }
   });
 
@@ -3587,7 +4080,7 @@ async function startServer() {
       });
       res.json({ success: true, spends });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/spends');
     }
   });
 
@@ -3599,7 +4092,7 @@ async function startServer() {
       if (result.error) return res.status(400).json({ error: result.error });
       res.status(201).json({ success: true, entry: result.entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/spends');
     }
   });
 
@@ -3612,7 +4105,7 @@ async function startServer() {
       if (result.error) return res.status(400).json({ error: result.error });
       res.json({ success: true, entry: result.entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/spends/:id');
     }
   });
 
@@ -3624,7 +4117,7 @@ async function startServer() {
       if (result.error) return res.status(400).json({ error: result.error });
       res.json({ success: true, entry: result.entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/spends/:id/void');
     }
   });
 
@@ -3640,7 +4133,7 @@ async function startServer() {
       });
       res.json({ success: true, attributions });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/attributions');
     }
   });
 
@@ -3652,7 +4145,7 @@ async function startServer() {
       if (result.error) return res.status(400).json({ error: result.error });
       res.status(201).json({ success: true, entry: result.entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/attributions');
     }
   });
 
@@ -3662,7 +4155,7 @@ async function startServer() {
       const { from, to } = parseMktRange(req);
       res.json({ success: true, rows: marketingCommandCenter.autoAttributedOrders(from, to) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/auto-orders');
     }
   });
 
@@ -3672,7 +4165,7 @@ async function startServer() {
       const { from, to } = parseMktRange(req);
       res.json({ success: true, report: marketingCommandCenter.computeRoiReport(from, to) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/roi');
     }
   });
 
@@ -3682,7 +4175,7 @@ async function startServer() {
       const { from, to } = parseMktRange(req);
       res.json({ success: true, reconciliation: marketingCommandCenter.financeReconciliation(from, to) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/finance-reconciliation');
     }
   });
 
@@ -3691,7 +4184,7 @@ async function startServer() {
     try {
       res.json({ success: true, ...marketingCommandCenter.syncStatus() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/sync-status');
     }
   });
 
@@ -3707,7 +4200,7 @@ async function startServer() {
       res.setHeader('Content-Disposition', `attachment; filename="Kisholoy_Marketing_${type}_${Date.now()}.csv"`);
       res.send(csvData);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/marketing/command/export');
     }
   });
 
@@ -3719,7 +4212,7 @@ async function startServer() {
       const summary = securityEngine.runSecurityAudit();
       res.json({ success: true, diagnostics: summary });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/diagnostics');
     }
   });
 
@@ -3728,7 +4221,7 @@ async function startServer() {
       const result = securityEngine.verifyLedgerIntegrity();
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/audit-chain/verify');
     }
   });
 
@@ -3738,13 +4231,14 @@ async function startServer() {
       const ledger = securityEngine.getChainedLedger(limit);
       res.json({ success: true, ledger });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/audit-chain/ledger');
     }
   });
 
   app.post('/api/security/audit-chain/log', (req, res) => {
     try {
-      const { operator, role, action, resource, resourceId, details, severity, category } = req.body;
+      const { role, action, resource, resourceId, details, severity, category } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
       
       const entry = securityEngine.logAudit({
@@ -3760,290 +4254,14 @@ async function startServer() {
       });
       res.json({ success: true, entry });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get('/api/security/users', (req, res) => {
-    try {
-      const users = securityEngine.getAdminUsers();
-      res.json({ success: true, users });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/users/create', (req, res) => {
-    try {
-      const { name, email, phone, role, operator } = req.body;
-      if (!name || !email || !phone || !role) {
-        return res.status(400).json({ error: 'Name, email, phone and role are required' });
-      }
-      const newUser = securityEngine.createStaffUser({ name, email, phone, role }, operator || 'SUPER_ADMIN');
-      res.json({ success: true, user: newUser });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/users/update-role', (req, res) => {
-    try {
-      const { userId, role, operator, operatorRole } = req.body;
-      if (!userId || !role) {
-        return res.status(400).json({ error: 'User ID and new role are required' });
-      }
-
-      // Privilege escalation defense: Only SUPER_ADMIN can assign or modify roles
-      if (operatorRole && operatorRole !== 'SUPER_ADMIN') {
-        return res.status(403).json({ error: 'Privilege Escalation Blocked: Only Super Administrators can alter staff roles.' });
-      }
-
-      const ok = securityEngine.updateUserRole(userId, role, operator || 'SUPER_ADMIN');
-      if (!ok) return res.status(404).json({ error: 'Staff user not found' });
-      res.json({ success: true, message: 'Role updated successfully' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/users/update-status', (req, res) => {
-    try {
-      const { userId, status, operator } = req.body;
-      if (!userId || !status) {
-        return res.status(400).json({ error: 'User ID and new status are required' });
-      }
-      const ok = securityEngine.updateUserStatus(userId, status, operator || 'SUPER_ADMIN');
-      if (!ok) return res.status(404).json({ error: 'Staff user not found' });
-      res.json({ success: true, message: `User status changed to ${status}` });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/login', (req, res) => {
-    try {
-      const { email, password } = req.body;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-      const userAgent = req.headers['user-agent'] || 'UnknownBrowser';
-
-      if (!email || !password) {
-        return res.status(400).json({ error: 'Email and password are required' });
-      }
-
-      const authResult = securityEngine.authenticate(email, password, clientIp, userAgent);
-      if (!authResult.success) {
-        return res.status(401).json({ error: authResult.error });
-      }
-
-      res.json({
-        success: true,
-        token: authResult.token,
-        session: authResult.session,
-        user: authResult.user,
-        requires2FA: authResult.requires2FA
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/ensure-super-admin', async (req, res) => {
-    try {
-      const superAdminEmail = 'kisholoybd.official@gmail.com';
-      let firebaseSynced = false;
-      let uid = req.body?.uid;
-
-      try {
-        const { getFirebaseAdminAuth } = await import('./lib/services');
-        const adminAuth = getFirebaseAdminAuth();
-        if (!uid) {
-          try {
-            const userRecord = await adminAuth.getUserByEmail(superAdminEmail);
-            uid = userRecord.uid;
-          } catch (notFound: any) {
-            if (notFound?.code === 'auth/user-not-found') {
-              const created = await adminAuth.createUser({
-                email: superAdminEmail,
-                password: 'KisholoySuperAdmin@2026!',
-                displayName: 'Kisholoy Official Super Admin',
-                emailVerified: true
-              });
-              uid = created.uid;
-            }
-          }
-        }
-        if (uid) {
-          await adminAuth.setCustomUserClaims(uid, {
-            admin: true,
-            superAdmin: true,
-            role: 'SUPER_ADMIN',
-            isStaff: true
-          });
-          firebaseSynced = true;
-        }
-      } catch (fbErr: any) {
-        console.warn('[Firebase Admin] ensure-super-admin note:', fbErr?.message || fbErr);
-      }
-
-      res.json({
-        success: true,
-        email: superAdminEmail,
-        role: 'SUPER_ADMIN',
-        firebaseSynced,
-        message: 'Default super-admin account verified with SUPER_ADMIN claims.'
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/logout', (req, res) => {
-    try {
-      const authHeader = req.headers['authorization'];
-      const token = req.body?.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
-      const operator = req.body?.operator;
-      const ok = securityEngine.logout(token, operator);
-      res.json({ success: ok, message: ok ? 'Logged out successfully' : 'Session already terminated' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/verify', (req, res) => {
-    try {
-      const authHeader = req.headers['authorization'];
-      const token = req.body?.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-      
-      const check = securityEngine.verifySession(token || '', clientIp);
-      if (!check.valid || !check.session) {
-        return res.status(401).json({ valid: false, error: 'Session expired or invalid token' });
-      }
-
-      const user = securityEngine.getAdminUsers().find(u => u.id === check.session?.userId);
-      const roleConfig = securityEngine.getRolePermissions().find(r => r.role === check.role);
-
-      res.json({
-        valid: true,
-        session: check.session,
-        user,
-        role: check.role,
-        permissions: roleConfig?.permissions || []
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.all('/api/security/auth/persona-session', (req, res) => {
-    try {
-      const role = (req.body?.role || req.query?.role || 'SUPER_ADMIN') as any;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-      const userAgent = (req.headers['user-agent'] as string) || 'KisholoyAdminClient';
-      const result = securityEngine.getOrCreatePersonaSession(role, clientIp, userAgent);
-      res.json(result);
-    } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/change-password', (req, res) => {
-    try {
-      const { userId, currentPassword, newPassword, operator, skipOldCheck } = req.body;
-      if (!userId || !newPassword) {
-        return res.status(400).json({ error: 'User ID and new password are required' });
-      }
-
-      const result = securityEngine.changeStaffPassword(
-        userId,
-        currentPassword,
-        newPassword,
-        operator || 'StaffSelf',
-        Boolean(skipOldCheck)
-      );
-
-      if (!result.success) {
-        return res.status(400).json({ error: result.error });
-      }
-
-      res.json({ success: true, message: 'Password updated successfully. All other active sessions terminated.' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/reset-password-request', (req, res) => {
-    try {
-      const { emailOrPhone } = req.body;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-
-      if (!emailOrPhone) {
-        return res.status(400).json({ error: 'Email or phone number is required' });
-      }
-
-      const result = securityEngine.generatePasswordResetRequest(emailOrPhone, clientIp);
-      res.json(result);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/reset-password-confirm', (req, res) => {
-    try {
-      const { emailOrPhone, code, newPassword } = req.body;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
-
-      if (!emailOrPhone || !code || !newPassword) {
-        return res.status(400).json({ error: 'Email/phone, verification code and new password are required' });
-      }
-
-      const result = securityEngine.confirmPasswordReset(emailOrPhone, code, newPassword, clientIp);
-      if (!result.success) {
-        return res.status(400).json({ error: result.error });
-      }
-
-      res.json({ success: true, message: 'Password reset successful. You may now login with your new password.' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/auth/mfa-verify', (req, res) => {
-    try {
-      const { operator, code, actionType } = req.body;
-      if (!code || !actionType) {
-        return res.status(400).json({ error: 'MFA code and actionType are required' });
-      }
-
-      const result = securityEngine.verifyMfaForAction(operator || 'Staff', code, actionType);
-      if (!result.success) {
-        return res.status(400).json({ error: result.error });
-      }
-
-      res.json({ success: true, message: 'Step-up MFA verified successfully' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/security/users/toggle-mfa', (req, res) => {
-    try {
-      const { userId, enabled, method, operator } = req.body;
-      if (!userId || enabled === undefined) {
-        return res.status(400).json({ error: 'User ID and enabled state are required' });
-      }
-
-      const ok = securityEngine.toggleMfa(userId, Boolean(enabled), method || 'APP_TOTP', operator || 'SUPER_ADMIN');
-      if (!ok) return res.status(404).json({ error: 'Staff user not found' });
-      res.json({ success: true, message: `MFA ${enabled ? 'enabled' : 'disabled'} for staff member` });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/audit-chain/log');
     }
   });
 
   app.post('/api/security/rbac/update-permissions', (req, res) => {
     try {
-      const { role, permissions, operator, operatorRole } = req.body;
+      const { role, permissions, operatorRole } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!role || !Array.isArray(permissions)) {
         return res.status(400).json({ error: 'Role and permissions array are required' });
       }
@@ -4056,7 +4274,7 @@ async function startServer() {
       if (!ok) return res.status(404).json({ error: 'Role configuration not found' });
       res.json({ success: true, message: `Permissions updated for role ${role}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rbac/update-permissions');
     }
   });
 
@@ -4070,7 +4288,7 @@ async function startServer() {
       const metrics = supplierEngine.getOverviewMetrics();
       res.json({ success: true, suppliers, metrics });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers');
     }
   });
 
@@ -4080,13 +4298,13 @@ async function startServer() {
       if (!data) return res.status(404).json({ error: 'Supplier not found' });
       res.json({ success: true, ...data });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id');
     }
   });
 
   app.post('/api/suppliers/bulk-import', (req, res) => {
     try {
-      const operator = req.body.operator || 'Procurement Admin';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const items = req.body.suppliers || [];
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, error: 'No supplier records provided in import payload.' });
@@ -4097,7 +4315,7 @@ async function startServer() {
         ...result
       });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/suppliers/bulk-import');
     }
   });
 
@@ -4108,11 +4326,11 @@ async function startServer() {
         return res.status(400).json({ error: formatZodError(valResult.error) });
       }
 
-      const operator = req.body.operator || 'Staff';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const newSupplier = supplierEngine.createSupplier(valResult.data, operator);
       res.json({ success: true, supplier: newSupplier });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers');
     }
   });
 
@@ -4123,12 +4341,12 @@ async function startServer() {
         return res.status(400).json({ error: formatZodError(valResult.error) });
       }
 
-      const operator = req.body.operator || 'Staff';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const updated = supplierEngine.updateSupplier(req.params.id, valResult.data, operator);
       if (!updated) return res.status(404).json({ error: 'Supplier not found' });
       res.json({ success: true, supplier: updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id');
     }
   });
 
@@ -4140,9 +4358,14 @@ async function startServer() {
         return res.status(400).json({ error: formatZodError(valResult.error) });
       }
 
+      /**
+       * The purchaser of record is whoever the session belongs to. Accepting
+       * `operatorId`/`operatorName` from the body let any caller raise a purchase
+       * order in a colleague's name (with a fake default person when omitted).
+       */
       const operatorUser = {
-        id: req.body.operatorId || 'adm-003',
-        name: req.body.operatorName || 'Tanvir Ahmed (Inventory Lead)'
+        id: req.auth?.userId || req.auth?.account?.id || 'UNKNOWN_STAFF',
+        name: req.auth?.userName || req.auth?.account?.name || 'Unknown Staff'
       };
       const result = supplierEngine.createPurchaseOrder({
         supplierId: req.params.id,
@@ -4157,21 +4380,33 @@ async function startServer() {
       }
       res.json({ success: true, po: result.po });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/purchase-orders');
     }
   });
 
   app.post('/api/suppliers/:id/payments', (req, res) => {
     try {
-      const operator = req.body.operator || 'Farhana Yasmin (Accounts)';
+      const operator = sessionOperatorOf(req.auth);
       const { amount, paymentMethod, referenceNumber, notes, purchaseOrderId, mfaCode } = req.body;
 
-      // Sensitive-action check: High value payouts require confirmation / MFA validation
-      if (amount >= 50000 && mfaCode) {
-        const mfaCheck = securityEngine.verifyMfaForAction(operator, mfaCode, 'SUPPLIER_PAYOUT');
-        if (!mfaCheck.success) {
-          return res.status(400).json({ error: `Payout authorization failed: ${mfaCheck.error}` });
-        }
+      /**
+       * Money leaving the business is step-up verified against *this session's*
+       * authenticator — unconditionally for large amounts. The previous version
+       * called `securityEngine.verifyMfaForAction` (which accepted any six
+       * digits) and only when the client bothered to send `mfaCode`, so
+       * omitting the field skipped the check; `operator` also came from the
+       * body, letting anyone attribute the payout to a colleague.
+       */
+      const gate = requireStepUp({
+        account: req.auth?.account,
+        code: mfaCode,
+        action: 'SUPPLIER_PAYOUT',
+        amount,
+        ip: clientIpOf(req),
+        audit: (entry) => securityEngine.logAudit(entry as never),
+      });
+      if (!gate.ok) {
+        return res.status(gate.status).json({ success: false, code: gate.code, error: gate.error, errorBn: gate.errorBn });
       }
 
       const result = supplierEngine.recordSupplierPayment({
@@ -4188,31 +4423,31 @@ async function startServer() {
       }
       res.json({ success: true, payment: result.payment });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/payments');
     }
   });
 
   app.post('/api/suppliers/:id/pos/:poId/delivery', (req, res) => {
     try {
-      const operator = req.body.operator || 'Staff';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const { status } = req.body;
       const ok = supplierEngine.updateDeliveryStatus(req.params.poId, status, operator);
       if (!ok) return res.status(404).json({ error: 'Purchase order not found' });
       res.json({ success: true, message: `Delivery status updated to ${status}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/pos/:poId/delivery');
     }
   });
 
   app.post('/api/suppliers/:id/toggle-portal', (req, res) => {
     try {
-      const operator = req.body.operator || 'SUPER_ADMIN';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const { enabled } = req.body;
       const result = supplierEngine.togglePortalAccess(req.params.id, Boolean(enabled), operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, supplier: result.supplier });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/toggle-portal');
     }
   });
 
@@ -4240,7 +4475,7 @@ async function startServer() {
       });
       res.json({ success: true, token, supplier });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/portal-token');
     }
   });
 
@@ -4259,7 +4494,7 @@ async function startServer() {
 
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/portal/login');
     }
   });
 
@@ -4277,13 +4512,14 @@ async function startServer() {
 
       res.json({ success: true, ...dashboard });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/portal/dashboard');
     }
   });
 
   app.post('/api/suppliers/portal/update-profile', requireSupplierSelf('supplierId'), (req, res) => {
     try {
-      const { supplierId, updates, operator } = req.body;
+      const { supplierId, updates } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!supplierId) return res.status(400).json({ error: 'Supplier ID is required' });
 
       const result = supplierEngine.updateSupplierPortalProfile(supplierId, updates || {}, operator || 'Supplier Admin');
@@ -4291,7 +4527,7 @@ async function startServer() {
 
       res.json({ success: true, supplier: result.supplier, message: 'Supplier profile updated successfully' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/portal/update-profile');
     }
   });
 
@@ -4308,13 +4544,13 @@ async function startServer() {
 
       res.json({ success: true, message: 'Password updated successfully' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/portal/change-password');
     }
   });
 
   app.post('/api/suppliers/:id/set-portal-password', (req, res) => {
     try {
-      const operator = req.body.operator || 'SUPER_ADMIN';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       // Admins issue a temporary password rather than choosing one for the
       // vendor; it is shown once here and stored only as a hash.
       const result = supplierEngine.issueTemporaryPortalPassword(req.params.id, operator);
@@ -4325,7 +4561,7 @@ async function startServer() {
         message: 'Temporary password issued. Share it securely; the supplier must change it at next login.'
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/set-portal-password');
     }
   });
 
@@ -4338,7 +4574,7 @@ async function startServer() {
       const agreements = supplierEngine.getAllAgreements();
       res.json({ success: true, agreements });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/agreements/all');
     }
   });
 
@@ -4347,29 +4583,29 @@ async function startServer() {
       const agreements = supplierEngine.getAgreementsBySupplier(req.params.id);
       res.json({ success: true, agreements });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/agreements');
     }
   });
 
   app.post('/api/suppliers/:id/agreements', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const result = supplierEngine.createAgreement({ ...req.body, supplierId: req.params.id }, operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, agreement: result.agreement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/agreements');
     }
   });
 
   app.put('/api/suppliers/agreements/:id', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const result = supplierEngine.updateAgreement(req.params.id, req.body, operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, agreement: result.agreement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/agreements/:id');
     }
   });
 
@@ -4380,7 +4616,7 @@ async function startServer() {
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, message: 'Agreement removed' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/agreements/:id');
     }
   });
 
@@ -4390,7 +4626,7 @@ async function startServer() {
       const batches = supplierEngine.getAllBatches();
       res.json({ success: true, batches });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/batches/all');
     }
   });
 
@@ -4399,29 +4635,29 @@ async function startServer() {
       const batches = supplierEngine.getBatchesBySupplier(req.params.id);
       res.json({ success: true, batches });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/batches');
     }
   });
 
   app.post('/api/suppliers/:id/batches', (req, res) => {
     try {
-      const operator = req.body.operator || 'Inventory Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const result = supplierEngine.createSupplyBatch({ ...req.body, supplierId: req.params.id }, operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, batch: result.batch });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/batches');
     }
   });
 
   app.put('/api/suppliers/batches/:id', (req, res) => {
     try {
-      const operator = req.body.operator || 'Inventory Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const result = supplierEngine.updateSupplyBatch(req.params.id, req.body, operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, batch: result.batch });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/batches/:id');
     }
   });
 
@@ -4431,7 +4667,7 @@ async function startServer() {
       const sales = supplierEngine.getAllEligibleSales();
       res.json({ success: true, sales });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/eligible-sales/all');
     }
   });
 
@@ -4440,37 +4676,37 @@ async function startServer() {
       const sales = supplierEngine.getEligibleSalesBySupplier(req.params.id);
       res.json({ success: true, sales });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/eligible-sales');
     }
   });
 
   app.post('/api/suppliers/eligible-sales/process-order', (req, res) => {
     try {
-      const operator = req.body.operator || 'Order Fulfillment Staff';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const { order } = req.body;
       if (!order) return res.status(400).json({ error: 'Order object is required' });
       const result = supplierEngine.processDeliveredOrder(order, operator);
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/eligible-sales/process-order');
     }
   });
 
   app.post('/api/suppliers/eligible-sales/adjust-return', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Staff';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const { orderId, returnData } = req.body;
       if (!orderId) return res.status(400).json({ error: 'orderId is required' });
       const result = supplierEngine.adjustReturnedOrder(orderId, returnData, operator);
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/eligible-sales/adjust-return');
     }
   });
 
   app.post('/api/suppliers/eligible-sales/sync-delivered', (req, res) => {
     try {
-      const operator = req.body.operator || 'Settlement Engine Sync';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const deliveredOrders = serverDb.orders.filter(o => o.orderStatus === 'DELIVERED');
       let totalProcessed = 0;
       deliveredOrders.forEach(order => {
@@ -4480,7 +4716,7 @@ async function startServer() {
       const allSales = supplierEngine.getAllEligibleSales();
       res.json({ success: true, totalProcessed, totalEligibleSales: allSales.length, sales: allSales });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/eligible-sales/sync-delivered');
     }
   });
 
@@ -4490,7 +4726,7 @@ async function startServer() {
       const settlements = supplierEngine.getAllSettlements();
       res.json({ success: true, settlements });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/settlements/all');
     }
   });
 
@@ -4499,7 +4735,7 @@ async function startServer() {
       const settlements = supplierEngine.getSettlementsBySupplier(req.params.id);
       res.json({ success: true, settlements });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/settlements');
     }
   });
 
@@ -4509,13 +4745,13 @@ async function startServer() {
       if (!settlement) return res.status(404).json({ error: 'Settlement not found' });
       res.json({ success: true, settlement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/settlements/:id');
     }
   });
 
   app.post('/api/suppliers/:id/settlements', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const result = supplierEngine.createSettlement({
         supplierId: req.params.id,
         periodStart: req.body.periodStart,
@@ -4525,32 +4761,37 @@ async function startServer() {
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, settlement: result.settlement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/settlements');
     }
   });
 
   app.put('/api/suppliers/settlements/:id/status', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Lead';
+      const operator = sessionOperatorOf(req.auth); // never from the body: it is the audit signature
       const { status } = req.body;
       const result = supplierEngine.updateSettlementStatus(req.params.id, status, operator);
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, settlement: result.settlement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/settlements/:id/status');
     }
   });
 
   app.post('/api/suppliers/settlements/:id/pay', (req, res) => {
     try {
-      const operator = req.body.operator || 'Finance Lead';
+      const operator = sessionOperatorOf(req.auth);
       const { amount, paymentMethod, referenceNumber, notes, mfaCode } = req.body;
 
-      if (amount >= 50000 && mfaCode) {
-        const mfaCheck = securityEngine.verifyMfaForAction(operator, mfaCode, 'SUPPLIER_PAYOUT');
-        if (!mfaCheck.success) {
-          return res.status(400).json({ error: `Payout authorization failed: ${mfaCheck.error}` });
-        }
+      const gate = requireStepUp({
+        account: req.auth?.account,
+        code: mfaCode,
+        action: 'SUPPLIER_SETTLEMENT_PAYOUT',
+        amount,
+        ip: clientIpOf(req),
+        audit: (entry) => securityEngine.logAudit(entry as never),
+      });
+      if (!gate.ok) {
+        return res.status(gate.status).json({ success: false, code: gate.code, error: gate.error, errorBn: gate.errorBn });
       }
 
       const result = supplierEngine.recordSettlementPayment(req.params.id, {
@@ -4563,7 +4804,7 @@ async function startServer() {
       if (!result.success) return res.status(400).json({ error: result.error });
       res.json({ success: true, settlement: result.settlement, payment: result.payment });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/settlements/:id/pay');
     }
   });
 
@@ -4579,7 +4820,7 @@ async function startServer() {
       if (!statement) return res.status(404).json({ error: 'Supplier not found' });
       res.json({ success: true, statement });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/:id/statement');
     }
   });
 
@@ -4588,7 +4829,7 @@ async function startServer() {
       const metrics = supplierEngine.getSupplyChainMetrics();
       res.json({ success: true, metrics });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/suppliers/supply-chain/metrics');
     }
   });
 
@@ -4596,226 +4837,36 @@ async function startServer() {
   // Customer Identity & Authentication APIs
   // =============================================================
 
-  app.post('/api/customer/auth/login', (req, res) => {
-    try {
-      const { identifier, password } = req.body;
-      if (!identifier || !password) {
-        return res.status(400).json({ error: 'Identifier (email or phone) and password are required' });
-      }
-
-      const cleanIdentifier = identifier.trim().toLowerCase();
-      const customer = serverDb.customers.find(
-        c => c.email.toLowerCase() === cleanIdentifier || c.phone.trim() === cleanIdentifier
-      );
-
-      if (!customer) {
-        // Uniform error to prevent account enumeration
-        return res.status(401).json({ error: 'Invalid credentials. Please verify your email/phone and password.' });
-      }
-
-      // Customer session token
-      const token = issueSessionToken('CUSTOMER', customer.id);
-      res.json({
-        success: true,
-        token,
-        customer: {
-          id: customer.id,
-          name: customer.name,
-          email: customer.email,
-          phone: customer.phone,
-          totalSpent: customer.totalSpent,
-          totalOrders: customer.totalOrders,
-          defaultAddress: customer.defaultAddress,
-          status: customer.status,
-          joinedDate: customer.joinedDate
-        }
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/customer/auth/register', (req, res) => {
-    try {
-      const { name, email, phone, password, address, district } = req.body;
-      if (!name || !phone || !password) {
-        return res.status(400).json({ error: 'Name, phone number and password are required' });
-      }
-
-      const cleanPhone = phone.trim();
-      const cleanEmail = (email || '').trim().toLowerCase();
-
-      const existing = serverDb.customers.find(
-        c => c.phone.trim() === cleanPhone || (cleanEmail && c.email.toLowerCase() === cleanEmail)
-      );
-
-      if (existing) {
-        return res.status(400).json({ error: 'An account with this phone number or email already exists.' });
-      }
-
-      const id = `cust-${Date.now()}`;
-      const newCustomer: Customer = {
-        id,
-        name: name.trim(),
-        email: cleanEmail || `${cleanPhone}@customer.kisholoy.com`,
-        phone: cleanPhone,
-        totalSpent: 0,
-        totalOrders: 0,
-        joinedDate: new Date().toISOString().split('T')[0],
-        defaultAddress: address ? address.trim() : 'Dhaka, Bangladesh',
-        status: 'ACTIVE'
-      };
-
-      serverDb.customers.push(newCustomer);
-
-      if (address) {
-        serverDb.customerAddresses.push({
-          id: `addr-${Date.now()}`,
-          customerId: id,
-          label: 'Home',
-          labelBn: 'বাসা',
-          recipientName: name.trim(),
-          phone: cleanPhone,
-          addressLine: address.trim(),
-          district: district || 'Dhaka',
-          division: 'Dhaka',
-          upazilaOrArea: district || 'Dhaka',
-          postalCode: '1200',
-          isDefault: true,
-          createdAt: new Date().toISOString()
-        });
-      }
-
-      const token = issueSessionToken('CUSTOMER', id);
-      res.json({
-        success: true,
-        token,
-        customer: newCustomer,
-        message: 'Account created successfully'
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/customer/auth/logout', (req, res) => {
-    res.json({ success: true, message: 'Logged out successfully' });
-  });
-
-  app.post('/api/customer/auth/link-guest-order', requireCustomerSelf('customerId'), (req, res) => {
-    try {
-      const { customerId, orderNumber, phone } = req.body;
-      if (!customerId || !orderNumber || !phone) {
-        return res.status(400).json({ error: 'Customer ID, Order Number, and Phone number are required to link order.' });
-      }
-
-      const customer = serverDb.customers.find(c => c.id === customerId);
-      if (!customer) {
-        return res.status(404).json({ error: 'Customer account not found.' });
-      }
-
-      const cleanOrderNum = orderNumber.trim().toUpperCase();
-      const cleanPhone = phone.trim();
-
-      const order = serverDb.orders.find(o => 
-        (o.id.toUpperCase() === cleanOrderNum || o.orderNumber?.toUpperCase() === cleanOrderNum) &&
-        (((o as any).customerPhone || (o as any).customer?.phone || '').replace(/\D/g, '') === cleanPhone.replace(/\D/g, '') ||
-         customer.phone.replace(/\D/g, '') === cleanPhone.replace(/\D/g, ''))
-      );
-
-      if (!order) {
-        return res.status(404).json({ error: 'No order matched the provided Order Number and verification phone.' });
-      }
-
-      if ((order as any).customerId && (order as any).customerId === customerId) {
-        return res.json({ success: true, message: 'This order is already linked to your account.', order });
-      }
-
-      (order as any).customerId = customerId;
-      customer.totalOrders = (customer.totalOrders || 0) + 1;
-      customer.totalSpent = (customer.totalSpent || 0) + (order.total || 0);
-
-      securityEngine.logAudit({
-        operator: customer.name,
-        role: 'CUSTOMER',
-        action: 'ORDER_LINKED_TO_CUSTOMER',
-        category: 'ORDER',
-        severity: 'INFO',
-        resource: 'Order',
-        resourceId: order.id,
-        details: `Guest order ${order.id} verified with phone ${cleanPhone} and linked to customer ${customer.name} (${customer.id}).`
-      });
-
-      res.json({
-        success: true,
-        message: `Order #${order.orderNumber || order.id} has been successfully linked to your account.`,
-        order
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post('/api/customer/auth/change-password', requireCustomerSelf('customerId'), (req, res) => {
-    try {
-      const { customerId, currentPassword, newPassword } = req.body;
-      if (!customerId || !newPassword) {
-        return res.status(400).json({ error: 'Customer ID and new password are required' });
-      }
-      if (newPassword.length < 6) {
-        return res.status(400).json({ error: 'New password must be at least 6 characters.' });
-      }
-
-      const customer = serverDb.customers.find(c => c.id === customerId);
-      if (!customer) {
-        return res.status(404).json({ error: 'Customer not found.' });
-      }
-
-      securityEngine.logAudit({
-        operator: customer.name,
-        role: 'CUSTOMER',
-        action: 'CUSTOMER_PASSWORD_CHANGED',
-        category: 'AUTH',
-        severity: 'INFO',
-        resource: 'Customer',
-        resourceId: customerId,
-        details: `Customer ${customer.name} updated their security password.`
-      });
-
-      res.json({ success: true, message: 'Password updated successfully.' });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   app.get('/api/security/sessions', (req, res) => {
     try {
       const sessions = securityEngine.getActiveSessions();
       res.json({ success: true, sessions });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/sessions');
     }
   });
 
   app.post('/api/security/sessions/revoke', (req, res) => {
     try {
-      const { sessionId, operator } = req.body;
+      const { sessionId } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!sessionId) return res.status(400).json({ error: 'Session ID is required' });
       const ok = securityEngine.revokeSession(sessionId, operator || 'SUPER_ADMIN');
       res.json({ success: ok, message: ok ? 'Session terminated immediately' : 'Session not found' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/sessions/revoke');
     }
   });
 
   app.post('/api/security/sessions/revoke-all-others', (req, res) => {
     try {
-      const { userId, currentToken, operator } = req.body;
+      const { userId, currentToken } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!userId) return res.status(400).json({ error: 'User ID is required' });
       const revokedCount = securityEngine.revokeAllSessionsForUser(userId, currentToken || '', operator || 'SUPER_ADMIN');
       res.json({ success: true, revokedCount, message: `Revoked ${revokedCount} other session(s)` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/sessions/revoke-all-others');
     }
   });
 
@@ -4824,7 +4875,7 @@ async function startServer() {
       const roles = securityEngine.getRolePermissions();
       res.json({ success: true, roles });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rbac/roles');
     }
   });
 
@@ -4833,7 +4884,7 @@ async function startServer() {
       const status = securityEngine.getRateLimitStatus();
       res.json({ success: true, status });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rate-limit/status');
     }
   });
 
@@ -4842,24 +4893,26 @@ async function startServer() {
       const bannedIps = securityEngine.getBannedIps();
       res.json({ success: true, bannedIps });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rate-limit/banned-ips');
     }
   });
 
   app.post('/api/security/rate-limit/unban', (req, res) => {
     try {
-      const { ip, operator } = req.body;
+      const { ip } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!ip) return res.status(400).json({ error: 'IP address is required' });
       const ok = securityEngine.unbanIp(ip, operator || 'SUPER_ADMIN');
       res.json({ success: ok, message: ok ? `IP ${ip} unbanned` : 'IP not found in ban registry' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rate-limit/unban');
     }
   });
 
   app.post('/api/security/rate-limit/ban', (req, res) => {
     try {
-      const { ip, reason, durationMinutes, operator } = req.body;
+      const { ip, reason, durationMinutes } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!ip) return res.status(400).json({ error: 'IP address is required' });
       const record = securityEngine.banIpManually(
         ip, 
@@ -4869,7 +4922,7 @@ async function startServer() {
       );
       res.json({ success: true, record, message: `IP ${ip} banned for ${durationMinutes || 60} minutes` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/security/rate-limit/ban');
     }
   });
 
@@ -4883,7 +4936,7 @@ async function startServer() {
       const health = backupEngine.getSystemHealth();
       res.json({ success: true, health });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/health');
     }
   });
 
@@ -4893,7 +4946,7 @@ async function startServer() {
       const snapshots = backupEngine.listSnapshots();
       res.json({ success: true, snapshots });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups');
     }
   });
 
@@ -4909,7 +4962,7 @@ async function startServer() {
       });
       res.json({ success: true, manifest, message: `Snapshot ${manifest.id} generated and verified` });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/create');
     }
   });
 
@@ -4919,7 +4972,7 @@ async function startServer() {
       const result = backupEngine.verifySnapshot(req.params.id);
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/:id/verify');
     }
   });
 
@@ -4934,7 +4987,7 @@ async function startServer() {
       res.setHeader('Content-Disposition', `attachment; filename="${snapshot.manifest.filename}"`);
       res.send(JSON.stringify(snapshot.payload, null, 2));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendInternalError(res, e, '/api/system/backups/:id/download');
     }
   });
 
@@ -4946,14 +4999,15 @@ async function startServer() {
       const dryRun = backupEngine.preRestoreDryRun(snapshotId);
       res.json({ success: true, dryRun });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/pre-restore');
     }
   });
 
   // 7. Atomic disaster recovery restore
   app.post('/api/system/backups/restore', (req, res) => {
     try {
-      const { snapshotId, operator, selectiveCollections } = req.body;
+      const { snapshotId, selectiveCollections } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!snapshotId) return res.status(400).json({ error: 'Snapshot ID is required' });
       const result = backupEngine.executeRestore({
         snapshotId,
@@ -4962,7 +5016,7 @@ async function startServer() {
       });
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/restore');
     }
   });
 
@@ -4972,17 +5026,18 @@ async function startServer() {
       const config = backupEngine.getScheduleConfig();
       res.json({ success: true, config });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/schedule');
     }
   });
 
   app.put('/api/system/backups/schedule', (req, res) => {
     try {
-      const { updates, operator } = req.body;
+      const { updates } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const config = backupEngine.updateScheduleConfig(updates || {}, operator || 'SUPER_ADMIN');
       res.json({ success: true, config, message: 'Backup schedule configuration updated' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/backups/schedule');
     }
   });
 
@@ -4992,17 +5047,18 @@ async function startServer() {
       const metrics = backupEngine.getDisasterRecoveryMetrics();
       res.json({ success: true, metrics });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/dr-metrics');
     }
   });
 
   app.post('/api/system/dr-drill', (req, res) => {
     try {
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const drill = backupEngine.runDisasterRecoveryDrill(operator || 'SUPER_ADMIN');
       res.json({ success: true, ...drill });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/dr-drill');
     }
   });
 
@@ -5017,7 +5073,7 @@ async function startServer() {
       res.setHeader('Content-Disposition', `attachment; filename="${exportFile.filename}"`);
       res.send(exportFile.content);
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/dr-drill');
     }
   };
   app.post('/api/system/export', handleExport);
@@ -5026,14 +5082,15 @@ async function startServer() {
   // 11. Bulk Data Importer with validation & dry run
   app.post('/api/system/import', (req, res) => {
     try {
-      const { entity, records, dryRun, operator } = req.body;
+      const { entity, records, dryRun } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!records || !Array.isArray(records)) {
         return res.status(400).json({ error: 'Records array is required' });
       }
       const result = backupEngine.importProducts(records, dryRun !== false, operator || 'SUPER_ADMIN');
       res.json({ success: true, result });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/import');
     }
   });
 
@@ -5043,47 +5100,60 @@ async function startServer() {
       const config = backupEngine.getDriveConfig();
       res.json({ success: true, config });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/config');
     }
   });
 
   app.post('/api/system/drive/connect', (req, res) => {
     try {
-      const { userEmail, folderName, operator } = req.body;
-      const result = backupEngine.connectDrive({ userEmail, folderName }, operator || 'SUPER_ADMIN');
-      res.json({ success: true, ...result, message: 'Google Drive connected successfully' });
+      const { userEmail, folderName } = req.body;
+      const operator = sessionOperatorOf(req.auth);
+      const result = backupEngine.connectDrive({ userEmail, folderName }, operator);
+      /**
+       * This route used to answer `success: true` and "Google Drive connected
+       * successfully" *in front of the engine's own refusal*, so the panel showed
+       * a cloud connection that no credential backed. The verdict is now the
+       * engine's, and a refusal is a 409 with what to set.
+       */
+      if (!result.success) {
+        return res.status(409).json(result);
+      }
+      res.json({ success: true, ...result, message: 'Google Drive is connected with the configured service account.' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/connect');
     }
   });
 
   app.post('/api/system/drive/disconnect', (req, res) => {
     try {
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const result = backupEngine.disconnectDrive(operator || 'SUPER_ADMIN');
       res.json({ success: true, ...result, message: 'Google Drive disconnected' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/disconnect');
     }
   });
 
   app.put('/api/system/drive/config', (req, res) => {
     try {
-      const { updates, operator } = req.body;
+      const { updates } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       const config = backupEngine.updateDriveConfig(updates || {}, operator || 'SUPER_ADMIN');
       res.json({ success: true, config, message: 'Google Drive & Sheets sync config updated' });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/config');
     }
   });
 
   app.post('/api/system/drive/sync-now', (req, res) => {
     try {
-      const { operator } = req.body;
+
+      const operator = sessionOperatorOf(req.auth);
       const result = backupEngine.syncToDriveAndSheets(operator || 'SUPER_ADMIN');
       res.json({ success: result.success, ...result });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/sync-now');
     }
   });
 
@@ -5092,18 +5162,19 @@ async function startServer() {
       const files = backupEngine.getDriveFiles();
       res.json({ success: true, files });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/files');
     }
   });
 
   app.post('/api/system/drive/restore', (req, res) => {
     try {
-      const { fileId, operator } = req.body;
+      const { fileId } = req.body;
+      const operator = sessionOperatorOf(req.auth);
       if (!fileId) return res.status(400).json({ error: 'fileId is required' });
       const result = backupEngine.restoreFromDriveFile(fileId, operator || 'SUPER_ADMIN');
       res.json({ success: true, ...result });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/drive/restore');
     }
   });
 
@@ -5165,39 +5236,275 @@ async function startServer() {
         checkpoints: auditChecks
       });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      sendInternalError(res, e, '/api/system/go-live-audit');
     }
   });
 
-  // Fallback 404 handler for all unmatched API routes (prevents falling through to Vite HTML)
-  app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.path}` });
+  // -------------------------------------------------------------
+  // 9b. SEO surface: sitemap + robots (dynamic for long-lived hosts).
+  //     On Vercel the static files in dist/ win, and the build regenerates them
+  //     from the same store via scripts/generate-sitemap.mjs.
+  // -------------------------------------------------------------
+  app.get('/sitemap.xml', async (req, res) => {
+    try {
+      /**
+       * `APP_URL` is authoritative. The `Host` header is attacker-controlled, so
+       * it is length-capped and shape-checked before it can appear in 46 sitemap
+       * URLs (a poisoned sitemap is SEO spam and a phishing vector), and the
+       * trailing slash is trimmed with a linear loop instead of /\/+$/ - which
+       * CodeQL flagged as polynomial on repeated slashes.
+       */
+      const hostHeader = String(req.get('host') || '').slice(0, 180);
+      const hostOk = /^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(hostHeader);
+      let site = platformConfig.appUrl || (hostOk ? `${req.protocol}://${hostHeader}` : '');
+      while (site.endsWith('/')) site = site.slice(0, -1);
+      const products = serverDb.products.filter((p) => !p.isDeleted && (p.status || 'ACTIVE') === 'ACTIVE' && p.slug);
+      const urls: string[] = [
+        `<url><loc>${site}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+        `<url><loc>${site}/shop</loc><changefreq>daily</changefreq><priority>0.9</priority></url>`,
+      ];
+      for (const p of products) {
+        const lastmod = String(p.updatedAt || p.publishedAt || '').slice(0, 10);
+        urls.push(
+          `<url><loc>${site}/product/${encodeURIComponent(p.slug)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}<changefreq>weekly</changefreq><priority>${(p.stock || 0) > 0 ? '0.8' : '0.4'}</priority></url>`
+        );
+      }
+      for (const slug of Array.from(new Set(products.map((p) => p.categorySlug).filter(Boolean)))) {
+        urls.push(`<url><loc>${site}/category/${encodeURIComponent(slug)}</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>`);
+      }
+      const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join('')}</urlset>`;
+      res.type('application/xml').setHeader('Cache-Control', 'public, max-age=3600').send(xml);
+    } catch (err) {
+      // A broken sitemap must never take the site down.
+      res.status(500).type('application/xml').send('<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>');
+    }
   });
 
-  // -------------------------------------------------------------
-  // 10. Vite Dev Middleware & Production Static Serving
-  // -------------------------------------------------------------
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        allowedHosts: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
-      },
-      appType: 'spa'
+  app.get('/robots.txt', (req, res, next) => {
+    // Prefer the built static file when present.
+    if (opts.apiOnly) return next();
+    res.sendFile(path.join(process.cwd(), 'dist', 'robots.txt'), (err) => {
+      if (err) {
+        res.type('text/plain').send(
+          ['User-agent: *', 'Allow: /', 'Disallow: /admin', 'Disallow: /account', 'Disallow: /checkout', 'Disallow: /order-confirmation', 'Disallow: /supplier', 'Disallow: /api/', '', 'Sitemap: /sitemap.xml'].join('\n')
+        );
+      }
     });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+  });
+
+  // Fallback 404 handler for all unmatched API routes. Without this, an
+  // unknown /api path fell through to the SPA and answered 200 + HTML, which
+  // the client then failed to JSON.parse — the classic "checkout says
+  // something went wrong" with a 200 in the network tab.
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: 'API endpoint not found.',
+      errorBn: 'এই API এন্ডপয়েন্টটি নেই।',
+      code: 'ENDPOINT_NOT_FOUND',
     });
+  });
+
+  // Final error handler: validation/JSON/parse failures never surface as HTML.
+  app.use(errorMiddleware() as never);
+
+  if (!opts.apiOnly) {
+    // -------------------------------------------------------------
+    // Static SPA. In production this only runs for long-lived Node hosts
+    // (Cloud Run / Docker); on Vercel the CDN serves dist/ and the function is
+    // mounted with apiOnly: true.
+    // -------------------------------------------------------------
+    if (opts.devVite) {
+      // Loaded only for `npm run dev`: bundling Vite into the serverless
+      // function would ship a dev tool (and its ~400 files) to production.
+      const viteSpec = 'vit' + 'e';
+      const { createServer: createViteServer } = ((await import(/* @vite-ignore */ viteSpec)) as unknown) as {
+        createServer: (options: Record<string, unknown>) => Promise<{ middlewares: never }>;
+      };
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          allowedHosts: true,
+          hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      app.use(
+        express.static(distPath, {
+          index: false,
+          maxAge: '1y',
+          setHeaders: (res, filePath) => {
+            // HTML must always revalidate or a stale bundle breaks deep links.
+            if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+          },
+        })
+      );
+      app.get(/^(?!\/api\/).*/, (req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
+        res.setHeader('Cache-Control', 'no-cache');
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Kisholoy full-stack server running on http://0.0.0.0:${PORT}`);
-  });
+  return app;
 }
 
-startServer();
+// ---------------------------------------------------------------------------
+// Boot sequence — hydrate durable state, bootstrap the administrator, and seed
+// demo data only when the store is empty. Idempotent and shared by every entry
+// point (CLI, dev server, serverless function).
+// ---------------------------------------------------------------------------
+
+export interface BootReport {
+  persistence: { mode: string; durable: boolean };
+  hydratedDocuments: number;
+  staffAccounts: number;
+  bootstrapCreated: boolean;
+  seeded: boolean;
+  warnings: string[];
+}
+
+let bootPromise: Promise<BootReport> | null = null;
+
+async function runBootstrap(): Promise<BootReport> {
+  const warnings: string[] = [];
+
+  // Route security-engine audit rows into the durable ledger.
+  setAuditSink((entry) => {
+    try {
+      serverDb.addSecurityAuditLog(entry);
+    } catch (err) {
+      log.warn('audit', 'sink_write_failed', (err as Error).message);
+    }
+  });
+
+  await persistence.ensureReady();
+  const storeHealth = await persistence.health();
+  if (!storeHealth.durable) {
+    warnings.push(
+      'VOLATILE persistence: orders, admin edits and staff accounts will not survive a restart. Configure MONGODB_URI for production.'
+    );
+  }
+
+  const { loaded } = await serverDb.hydrateFromStore();
+  await staffAuth.hydrate();
+  const bootstrap = await staffAuth.bootstrapSuperAdmin();
+  if (!bootstrap.created && staffAuth.hasAccounts() === false) {
+    warnings.push(
+      `No administrator account available (${bootstrap.reason || 'unknown reason'}). Set KISHOLOY_ADMIN_EMAIL and KISHOLOY_ADMIN_BOOTSTRAP_PASSWORD, then redeploy.`
+    );
+  }
+
+  let seeded = false;
+  try {
+    const { maybeSeedDemoCatalogue } = await import('./server/seed/seedDemoData');
+    seeded = await maybeSeedDemoCatalogue();
+  } catch (err) {
+    log.error('seed', 'auto_seed_skipped', err);
+  }
+
+  if (platformConfig.security.requirePersistence && !storeHealth.durable) {
+    throw new Error(
+      'Refusing to boot: KISHOLOY_REQUIRE_PERSISTENCE is enabled but no durable datastore is configured. Set MONGODB_URI (Atlas) or disable the guard.'
+    );
+  }
+
+  const report: BootReport = {
+    persistence: { mode: storeHealth.mode, durable: storeHealth.durable },
+    hydratedDocuments: loaded,
+    staffAccounts: staffAuth.count(),
+    bootstrapCreated: bootstrap.created,
+    seeded,
+    warnings,
+  };
+
+  log.info(
+    'boot',
+    `ready — persistence=${storeHealth.mode} durable=${storeHealth.durable} docs=${loaded} staff=${report.staffAccounts} seeded=${seeded} env=${platformConfig.env}`
+  );
+  for (const w of warnings) log.warn('boot', w);
+  return report;
+}
+
+/** Awaited before the first request is served; safe to call concurrently. */
+export function ensureBootstrapped(): Promise<BootReport> {
+  if (!bootPromise) bootPromise = runBootstrap();
+  return bootPromise;
+}
+
+// ---------------------------------------------------------------------------
+// Vercel / serverless entry. `api/index.js` re-exports this handler.
+// ---------------------------------------------------------------------------
+
+type RequestListener = (req: import('http').IncomingMessage, res: import('http').ServerResponse) => void;
+
+let handlerPromise: Promise<RequestListener> | null = null;
+
+/**
+ * Serverless entry. Vercel's Node runtime calls the exported default with
+ * `(req, res)`; we lazily build the app once per isolate and await the boot
+ * sequence (hydration + admin bootstrap) before the first response.
+ */
+export async function vercelHandler(req: import('http').IncomingMessage, res: import('http').ServerResponse) {
+  if (!handlerPromise) {
+    handlerPromise = (async () => {
+      await ensureBootstrapped();
+      const app = await createApp({ apiOnly: true });
+      return app as unknown as RequestListener;
+    })();
+  }
+  const handler = await handlerPromise;
+  return handler(req, res);
+}
+
+export default vercelHandler;
+
+// ---------------------------------------------------------------------------
+// Long-lived process entry (dev + standalone production).
+// ---------------------------------------------------------------------------
+
+async function startServer(): Promise<void> {
+  const devMode = process.env.NODE_ENV !== 'production';
+  const app = await createApp({ apiOnly: false, devVite: devMode });
+  const PORT = platformConfig.port;
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    log.info('http', `Kisholoy full-stack server listening on http://0.0.0.0:${PORT} (${devMode ? 'vite dev middleware' : 'static dist'})`);
+  });
+
+  // Vercel recycles isolates without SIGTERM guarantees, but containers do get
+  // them — flush durable state so nothing in the write queue is lost.
+  const shutdown = (signal: string) => {
+    log.info('http', `received ${signal}, flushing durable state`);
+    server.close(() => {
+      void persistence.close().finally(() => process.exit(0));
+    });
+    setTimeout(() => {
+      void persistence.close().finally(() => process.exit(1));
+    }, 8000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+// Only listen when this module is the process entry point (never when imported
+// by the serverless handler or a test).
+const invokedDirectly = (() => {
+  try {
+    const entry = process.argv[1] || '';
+    return /server\.(ts|js|cjs|mjs)$/.test(entry) && !process.env.KISHOLOY_TESTS;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
+  startServer().catch((err) => {
+    console.error('[fatal] server failed to start:', err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
+}

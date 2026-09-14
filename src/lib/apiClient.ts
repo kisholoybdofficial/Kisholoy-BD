@@ -2,45 +2,76 @@
  * Shared browser API client.
  *
  * Responsibilities:
- *  1. Attach the right bearer token to same-origin `/api/...` calls:
- *     staff/admin session token first, otherwise the logged-in customer's
- *     session token (so customer-scoped endpoints like `GET /api/orders`
- *     actually receive an identity to scope on).
- *  2. Fire the global `kisholoy-auth-expired` event ONLY for 401s that came
- *     back from staff-guarded paths. A stale customer token 401 in a tab that
- *     happens to sit on /admin must never log the whole admin panel out.
+ *  1. Attach the CSRF token that pairs with the httpOnly session cookie, so
+ *     ~200 hand-written admin `fetch()` call sites keep working while still
+ *     satisfying the server's double-submit check.
+ *  2. Keep session material out of `localStorage`. The previous version stored
+ *     the staff bearer under a plain key where any XSS (or any browser
+ *     extension) could read it; sessions now live in httpOnly cookies and this
+ *     module only remembers an in-memory bearer for API tooling.
+ *  3. Fire the global `kisholoy-auth-expired` event only for 401s that came
+ *     back from staff-guarded paths, so a stale customer token cannot log the
+ *     admin shell out.
  */
 
-export const STAFF_TOKEN_KEY = 'kisholoy_staff_token';
-export const CUSTOMER_TOKEN_KEY = 'kisholoy_customer_token';
-/** Written by the supplier portal login page (pre-existing key name). */
-export const SUPPLIER_TOKEN_KEY = 'ksh_supplier_token';
+export const CSRF_COOKIE = 'ksh_csrf';
+export const CSRF_HEADER = 'x-csrf-token';
 export const AUTH_EXPIRED_EVENT = 'kisholoy-auth-expired';
 
-const safeGet = (key: string): string | null => {
+/** Keys kept for backwards-compatible cleanup of previously stored tokens. */
+export const STAFF_TOKEN_KEY = 'kisholoy_staff_token';
+export const CUSTOMER_TOKEN_KEY = 'kisholoy_customer_token';
+export const SUPPLIER_TOKEN_KEY = 'ksh_supplier_token';
+
+/**
+ * Tokens are deliberately memory-only. Reading `localStorage` for a session
+ * token is what turned a content-injection bug into an account takeover.
+ */
+let memoryStaffToken: string | null = null;
+let memoryCustomerToken: string | null = null;
+let memorySupplierToken: string | null = null;
+
+const purgeLegacyTokenStorage = () => {
   try {
-    return localStorage.getItem(key);
+    // One-time cleanup: older builds persisted session tokens here.
+    localStorage.removeItem(STAFF_TOKEN_KEY);
+    localStorage.removeItem(CUSTOMER_TOKEN_KEY);
+    localStorage.removeItem(SUPPLIER_TOKEN_KEY);
+    localStorage.removeItem('ksh_supplier_token');
+  } catch {
+    /* storage unavailable */
+  }
+};
+
+export const getStaffToken = (): string | null => memoryStaffToken;
+export const setStaffToken = (token: string | null) => {
+  memoryStaffToken = token;
+  if (!token) purgeLegacyTokenStorage();
+};
+export const getCustomerToken = (): string | null => memoryCustomerToken;
+export const setCustomerToken = (token: string | null) => {
+  memoryCustomerToken = token;
+  if (!token) purgeLegacyTokenStorage();
+};
+export const getSupplierToken = (): string | null => memorySupplierToken;
+export const setSupplierToken = (token: string | null) => {
+  memorySupplierToken = token;
+};
+
+/** Reads the CSRF partner cookie (non-httpOnly by design). */
+export function readCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie
+    .split(';')
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${CSRF_COOKIE}=`));
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match.slice(CSRF_COOKIE.length + 1));
   } catch {
     return null;
   }
-};
-
-const safeSet = (key: string, value: string | null) => {
-  try {
-    if (value) localStorage.setItem(key, value);
-    else localStorage.removeItem(key);
-  } catch {
-    /* storage unavailable (private mode) — tokens stay in-memory only */
-  }
-};
-
-export const DEFAULT_ROOT_STAFF_TOKEN = 'ksh-token-super-admin-root-session-2026';
-export const getStaffToken = () => safeGet(STAFF_TOKEN_KEY);
-export const setStaffToken = (token: string | null) => safeSet(STAFF_TOKEN_KEY, token);
-export const getCustomerToken = () => safeGet(CUSTOMER_TOKEN_KEY);
-export const setCustomerToken = (token: string | null) => safeSet(CUSTOMER_TOKEN_KEY, token);
-export const getSupplierToken = () => safeGet(SUPPLIER_TOKEN_KEY);
-export const setSupplierToken = (token: string | null) => safeSet(SUPPLIER_TOKEN_KEY, token);
+}
 
 /** Paths that belong to the customer/portal surfaces — never staff-guarded. */
 const NON_STAFF_PATH_PATTERNS = [
@@ -65,7 +96,7 @@ const toPathname = (url: string): string => {
 export function isStaffGuardedPath(url: string): boolean {
   const path = toPathname(url);
   if (!path.startsWith('/api/')) return false;
-  return !NON_STAFF_PATH_PATTERNS.some(re => re.test(path));
+  return !NON_STAFF_PATH_PATTERNS.some((re) => re.test(path));
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -73,9 +104,21 @@ export interface ApiFetchOptions extends RequestInit {
   auth?: 'staff' | 'customer' | 'auto' | 'none';
 }
 
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Adds the CSRF partner header for cookie-authenticated mutations. */
+function withCsrf(headers: Headers, method: string | undefined, path: string): Headers {
+  if (!UNSAFE_METHODS.has((method || 'GET').toUpperCase())) return headers;
+  if (!path.startsWith('/api/')) return headers;
+  if (headers.has(CSRF_HEADER)) return headers;
+  const csrf = readCsrfToken();
+  if (csrf) headers.set(CSRF_HEADER, csrf);
+  return headers;
+}
+
 /**
- * fetch() wrapper that adds the appropriate bearer token and applies the
- * staff-scoped 401 handling described above.
+ * fetch() wrapper that adds the appropriate bearer token + CSRF partner and
+ * applies the staff-scoped 401 handling described above.
  */
 export async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
   const { auth = 'auto', headers, ...rest } = options;
@@ -88,21 +131,27 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
   else if (auth === 'customer') token = customerToken;
   else if (auth === 'auto') token = staffToken || customerToken;
 
-  const finalHeaders = new Headers(headers || {});
+  const path = toPathname(url);
+  const finalHeaders = withCsrf(new Headers(headers || {}), rest.method, path);
   if (token && !finalHeaders.has('Authorization')) {
     finalHeaders.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(url, { ...rest, headers: finalHeaders });
+  const res = await fetch(url, {
+    ...rest,
+    headers: finalHeaders,
+    // Same-origin sends the session cookie; 'include' is required only for the
+    // allow-listed CORS origins configured server-side.
+    credentials: rest.credentials ?? 'same-origin',
+  });
 
   if (res.status === 401) {
     const staffGuarded = isStaffGuardedPath(url);
-    // Only a 401 on a staff-guarded path with a staff token in play means the
-    // staff session died. Customer-token 401s stay local to the customer flow.
-    if (staffGuarded && staffToken && token === staffToken) {
+    if (staffGuarded && staffToken) {
       window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'STAFF' } }));
-    } else if (!staffGuarded || token === customerToken) {
+    } else if (!staffGuarded) {
       setCustomerToken(null);
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'CUSTOMER' } }));
     }
   }
 
@@ -121,26 +170,39 @@ export async function apiFetchJson<T = any>(url: string, options: ApiFetchOption
   }
 }
 
+/** Reads a friendly error message out of an API failure response. */
+export async function readApiError(res: Response, fallback = 'Something went wrong.'): Promise<{ error: string; errorBn?: string; fields?: Record<string, string>; code?: string }> {
+  try {
+    const data = await res.json();
+    return {
+      error: data?.error || data?.message || fallback,
+      errorBn: data?.errorBn || data?.messageBn,
+      fields: data?.fields,
+      code: data?.code,
+    };
+  } catch {
+    return { error: fallback };
+  }
+}
+
 /**
  * Global `fetch` interceptor.
  *
  * The admin screens contain ~200 hand-written `fetch('/api/...')` call sites
- * that predate this module. Now that the server enforces a staff session on
- * every mutation, each of those would fail with 401 unless it carries a token.
- * Rewriting every call site is high-risk churn, so we patch `window.fetch`
- * once at boot: any same-origin `/api/**` request that does not already set an
- * Authorization header gets the same token `apiFetch` would have attached.
- *
- * Calls that already use `apiFetch` are unaffected (their header is set), and
- * cross-origin requests are passed through untouched.
+ * that predate this module. Rather than rewrite every one, a single interceptor
+ * adds (a) the session bearer if one exists in memory and (b) the CSRF partner
+ * header for mutations. Cross-origin requests are passed through untouched.
  */
-export function installApiAuthInterceptor() {
+export function installApiAuthInterceptor(): void {
   if (typeof window === 'undefined') return;
   const w = window as unknown as { __kshFetchPatched?: boolean };
   if (w.__kshFetchPatched) return;
   w.__kshFetchPatched = true;
+  purgeLegacyTokenStorage();
 
-  const nativeFetch = (window.fetch ? window.fetch.bind(window) : globalThis.fetch.bind(globalThis)) as typeof window.fetch;
+  const nativeFetch = (window.fetch
+    ? window.fetch.bind(window)
+    : globalThis.fetch.bind(globalThis)) as typeof window.fetch;
 
   const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     let path = '';
@@ -159,22 +221,18 @@ export function installApiAuthInterceptor() {
 
     if (!path.startsWith('/api/')) return nativeFetch(input as RequestInfo, init);
 
-    // Respect an Authorization header the caller already set.
-    const existing = new Headers(
-      init?.headers || (input instanceof Request ? input.headers : undefined)
-    );
-    if (existing.has('Authorization')) return nativeFetch(input as RequestInfo, init);
-
-    // Pick the token that matches the surface being called.
+    const existing = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
     const isSupplierPortal = /^\/api\/suppliers?\/portal\//.test(path);
-    const token = isSupplierPortal
-      ? getSupplierToken() || getStaffToken()
-      : isStaffGuardedPath(path)
-        ? getStaffToken() || getCustomerToken()
-        : getCustomerToken() || getStaffToken();
-    if (!token) return nativeFetch(input as RequestInfo, init);
 
-    existing.set('Authorization', `Bearer ${token}`);
+    if (!existing.has('Authorization')) {
+      const token = isSupplierPortal
+        ? getSupplierToken() || getStaffToken()
+        : isStaffGuardedPath(path)
+          ? getStaffToken() || getCustomerToken()
+          : getCustomerToken() || getStaffToken();
+      if (token) existing.set('Authorization', `Bearer ${token}`);
+    }
+    withCsrf(existing, init?.method, path);
 
     if (input instanceof Request && !init) {
       return nativeFetch(new Request(input, { headers: existing }));
@@ -185,40 +243,22 @@ export function installApiAuthInterceptor() {
   const safeDefine = (obj: any): boolean => {
     if (!obj) return false;
     try {
-      Object.defineProperty(obj, 'fetch', {
-        value: customFetch,
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
+      Object.defineProperty(obj, 'fetch', { value: customFetch, writable: true, configurable: true, enumerable: true });
       return true;
     } catch {
       return false;
     }
   };
 
-  // 1. Attempt on window directly
   let patched = safeDefine(window);
-
-  // 2. Attempt on Window.prototype if window definition was blocked
-  if (!patched && typeof Window !== 'undefined' && Window.prototype) {
-    patched = safeDefine(Window.prototype);
-  }
-
-  // 3. Attempt on window prototype chain if available
+  if (!patched && typeof Window !== 'undefined' && Window.prototype) patched = safeDefine(Window.prototype);
   if (!patched) {
     try {
       const proto = Object.getPrototypeOf(window);
-      if (proto) {
-        patched = safeDefine(proto);
-      }
+      if (proto) patched = safeDefine(proto);
     } catch {
       /* ignore */
     }
   }
-
-  // 4. Attempt on globalThis
-  if (!patched && typeof globalThis !== 'undefined') {
-    safeDefine(globalThis);
-  }
+  if (!patched && typeof globalThis !== 'undefined') safeDefine(globalThis);
 }

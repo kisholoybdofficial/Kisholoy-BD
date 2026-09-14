@@ -1,0 +1,106 @@
+name: CI
+
+# What this proves, in order: the types compile, the security/contract suites
+# pass, the *deployable artifact* builds (the Vercel function is a bundle — a
+# missing build step is how every API route silently 404s in production), and a
+# real process boots and answers the health endpoint.
+#
+# Deliberately not here: the SonarCloud "Analysis" job in sonarcloud.yml fails on
+# `main` too (it needs a SONAR_TOKEN the repository does not currently expose), so
+# a red Analysis check is a pre-existing configuration problem, not a regression
+# from the change under review.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck · test · build · boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # `npm ci` is intentionally NOT used yet: the committed lockfile has
+          # drifted from package.json, so a clean install would fail for reasons
+          # unrelated to the change. Regenerate it in a dedicated commit and switch
+          # this to `npm ci`.
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit + contract + artifact tests
+        run: npm test
+        env:
+          NODE_ENV: test
+          KISHOLOY_TESTS: '1'
+          KISHOLOY_PERSISTENCE_DRIVER: file
+
+      - name: Build SPA and the serverless bundle
+        run: npm run build
+
+      - name: The serverless bundle must carry no credential literal
+        run: |
+          set -e
+          for banned in 'KisholoySuperAdmin@' 'Kisholoy@2026!' 'ksh-token-super-admin-root-session' 'kisholoy_bd_salt_99812' 'kisholoy_root_superadmin_session_token'; do
+            if grep -qF -- "$banned" api/server.bundle.cjs dist/assets/*.js 2>/dev/null; then
+              echo "::error::deployed artifact contains a credential literal: $banned"
+              exit 1
+            fi
+          done
+          echo "no credential literals in api/server.bundle.cjs or the client bundle"
+
+      - name: Boot the API and probe it
+        run: |
+          set -e
+          PORT=3000 KISHOLOY_PERSISTENCE_DRIVER=file KISHOLOY_REQUIRE_PERSISTENCE=false \
+          KISHOLOY_ALLOW_DEMO_DATA=true KISHOLOY_AUTO_SEED=true \
+          KISHOLOY_SESSION_SECRET=ci-only-secret-0123456789abcdef0123456789abcdef \
+          KISHOLOY_ADMIN_EMAIL=ci@kisholoy.test KISHOLOY_ADMIN_BOOTSTRAP_PASSWORD=Ci-Bootstrap-Pass-2026 \
+          npx tsx server.ts > /tmp/server.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:3000/api/health >/tmp/health.json && break
+            sleep 2
+          done
+          cat /tmp/health.json
+          echo '--- privileged reads must fail closed, in Bengali ---'
+          code=$(curl -s -o /tmp/orders.json -w '%{http_code}' http://127.0.0.1:3000/api/orders)
+          echo "GET /api/orders -> $code"; cat /tmp/orders.json
+          test "$code" = "401"
+          grep -q 'AUTH_REQUIRED' /tmp/orders.json
+          # Bengali is first-class: the denial must carry the Bengali range too.
+          # One-liner on purpose: a heredoc inside a block scalar would keep the
+          # YAML indentation and break both Python and the terminator.
+          python3 -c "import io,sys;t=io.open('/tmp/orders.json',encoding='utf-8').read();bn=[c for c in t if '\u0980'<=c<='\u09ff'];print('bengali denial ok' if bn else '::error::denial body has no Bengali characters');sys.exit(0 if bn else 1)"
+          echo '--- backdoors stay shut ---'
+          for path in /api/security/auth/ensure-super-admin /api/payments/test-ipn /api/seed /api/debug; do
+            c=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:3000$path")
+            echo "POST $path -> $c"
+            case "$c" in 401|404) ;; *) echo "::error::$path answered $c"; exit 1;; esac
+          done
+          echo '--- server log ---'; tail -20 /tmp/server.log
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: /tmp/server.log
+          if-no-files-found: ignore

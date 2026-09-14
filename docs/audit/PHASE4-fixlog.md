@@ -136,7 +136,7 @@ reviewable table (`server/routePermissions.ts`) that `enforceStaffSurface`
 consults after establishing the session; denials emit a `PERMISSION_DENIED`
 audit row naming the role, route and missing permission.
 
-Verified against the five seeded roles (all `Kisholoy@2026!`):
+Verified against the five seeded roles (all sharing one redacted default password, since revoked and removed from the codebase):
 
 | Action | SUPER | ORDER | INVENTORY | FINANCE | SUPPORT |
 |---|---|---|---|---|---|

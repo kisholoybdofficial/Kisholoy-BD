@@ -108,7 +108,9 @@ export const CustomerAuthModal: React.FC<CustomerAuthModalProps> = ({
           userName: user.displayName || 'Google User',
           userPhone: user.phoneNumber || 'Google Account',
           userEmail: user.email || '',
-          role: user.email === 'kisholoybd.official@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
+          // Recorded as a customer: the browser never decides who is staff, and
+          // audit entries claiming a role the server never granted are worthless.
+          role: 'CUSTOMER',
           eventType: 'LOGIN_SUCCESS',
           district: 'Dhaka',
           device: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile (Chrome)' : 'Desktop (Browser)',

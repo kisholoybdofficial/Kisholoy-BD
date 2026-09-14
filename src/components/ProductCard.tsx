@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ShoppingBag, Star, CheckCircle2, Heart, Sparkles, MapPin } from 'lucide-react';
 import { Product } from '../types';
 import { useApp } from '../context/AppContext';
+import { ProductImage } from './ProductImage';
 
 interface ProductCardProps {
   product: Product;
@@ -25,11 +26,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       {/* Product Image Container */}
       <div className="relative aspect-square w-full overflow-hidden bg-stone-100 dark:bg-slate-800">
         <Link to={`/product/${product.slug}`} className="block w-full h-full">
-          <img
-            src={product.images[0]}
+          <ProductImage
+            src={product.images?.[0]}
             alt={title}
-            className="h-full w-full object-cover object-center group-hover:scale-108 transition-transform duration-700 ease-out"
-            loading="lazy"
+            fill
+            imgClassName="object-cover object-center group-hover:scale-108 transition-transform duration-700 ease-out"
           />
         </Link>
 

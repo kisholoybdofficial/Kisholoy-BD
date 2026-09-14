@@ -8,6 +8,7 @@ import {
   Bell, MessageCircle, Smartphone, CheckCheck, LogOut, Lock, Eye, EyeOff, Link2, Languages
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useSeo } from '../lib/seo';
 import { CustomerAddress, WishlistItem, CustomerReturnRequest } from '../types';
 
 export function AccountPage() {
@@ -45,6 +46,18 @@ export function AccountPage() {
     ['orders', 'wishlist', 'addresses', 'returns', 'notifications', 'profile'].includes(initialTab) ? initialTab : 'orders'
   );
 
+  useSeo(
+    {
+      title: 'My account | Kisholoy',
+      titleBn: 'আমার অ্যাকাউন্ট | কিশলয়',
+      description: 'Sign in to Kisholoy to manage orders, addresses, wishlist, returns and notifications.',
+      path: '/account',
+      private: true,
+      locale: language === 'BN' ? 'bn' : 'en',
+    },
+    [language, currentCustomerId, activeTab]
+  );
+
   // Sync tab with URL search parameter
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -63,6 +76,7 @@ export function AccountPage() {
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
   // Register form fields
@@ -155,23 +169,42 @@ export function AccountPage() {
     }
     setAuthLoading(true);
     try {
+      // Credentials are verified by the server, which answers with an httpOnly
+      // session cookie; nothing sensitive is written to storage here.
       const res = await fetch('/api/customer/auth/login', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: loginIdentifier, password: loginPassword })
+        body: JSON.stringify({ identifier: loginIdentifier.trim(), password: loginPassword })
       });
-      const data = await res.json();
-      if (data.success && data.customer) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.customer) {
         loginCustomer(data.customer.id, data.customer, data.token || null);
-        showToast(`Welcome back, ${data.customer.name}!`);
+        setAuthError(null);
+        showToast(language === 'BN' ? `স্বাগতম, ${data.customer.name}!` : `Welcome back, ${data.customer.name}!`);
       } else {
-        showToast(data.error || 'Invalid credentials.');
+        setAuthError(
+          language === 'BN'
+            ? data?.errorBn || 'ইমেইল/মোবাইল নম্বর বা পাসওয়ার্ড ভুল।'
+            : data?.error || 'Invalid credentials.'
+        );
       }
     } catch (err: any) {
       showToast(err.message || 'Login connection failed.');
     } finally {
       setAuthLoading(false);
     }
+  };
+
+  // Secure sign-out: end the server session (revokes + clears the httpOnly
+  // cookie) before clearing local state, so a shared browser cannot be reused.
+  const handleSignOut = async () => {
+    try {
+      await fetch('/api/customer/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch {
+      /* even if the call fails, local state is cleared below */
+    }
+    logoutCustomer();
   };
 
   // Handle Registration
@@ -222,7 +255,7 @@ export function AccountPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          customerId: currentCustomerId || 'cust-1',
+          customerId: currentCustomerId,
           orderNumber: linkOrderNumber,
           phone: linkOrderPhone
         })
@@ -461,6 +494,17 @@ export function AccountPage() {
             {/* SIGN IN FORM */}
             {authMode === 'login' && (
               <form onSubmit={handleLoginSubmit} className="space-y-4">
+              {authError && (
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] font-medium text-rose-800"
+                >
+                  <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
                 <div>
                   <label className="block text-stone-700 font-semibold mb-1">
                     {language === 'BN' ? 'মোবাইল নম্বর অথবা ইমেইল' : 'Mobile Number or Email'}
@@ -498,33 +542,6 @@ export function AccountPage() {
                       className="absolute right-3.5 top-3 text-stone-400 hover:text-stone-600"
                     >
                       {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Quick Demo Logins Helper */}
-                <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200/80 space-y-2 text-[11px] text-stone-600">
-                  <span className="font-bold text-stone-800 block">Instant 1-Click Demo Accounts:</span>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        loginCustomer('cust-1');
-                        showToast('Logged in as Tanzil Ahmed');
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-teal-50 border border-teal-200 dark:border-teal-500/30 text-teal-900 font-semibold hover:bg-teal-100 transition-colors"
-                    >
-                      Sign In as Tanzil Ahmed (cust-1)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        loginCustomer('cust-2');
-                        showToast('Logged in as Nusrat Jahan');
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-stone-100 border border-stone-300 text-stone-800 font-semibold hover:bg-stone-200 transition-colors"
-                    >
-                      Sign In as Nusrat Jahan (cust-2)
                     </button>
                   </div>
                 </div>
@@ -717,25 +734,12 @@ export function AccountPage() {
           </div>
         </div>
 
-        {/* Persona Switcher & Log Out Button */}
-        <div className="flex items-center gap-2.5 text-xs w-full sm:w-auto justify-between sm:justify-end">
-          <div className="flex items-center gap-1.5">
-            <span className="text-stone-500 font-medium">Switch Customer:</span>
-            <select
-              value={currentCustomerId}
-              onChange={(e) => {
-                loginCustomer(e.target.value);
-                showToast(`Switched customer to ${e.target.value === 'cust-1' ? 'Tanzil Ahmed' : 'Nusrat Jahan'}`);
-              }}
-              className="px-3 py-1.5 bg-white border border-stone-300 rounded-lg text-xs font-semibold text-stone-800 focus:outline-none focus:border-teal-900 shadow-2xs"
-            >
-              <option value="cust-1">Tanzil Ahmed</option>
-              <option value="cust-2">Nusrat Jahan</option>
-            </select>
-          </div>
-
+        {/* Sign out. There is deliberately no "switch customer" control here:
+            it previously re-labelled the local session as another shopper id and
+            rendered that person's addresses and orders without any credential. */}
+        <div className="flex items-center gap-2.5 text-xs w-full sm:w-auto justify-end">
           <button
-            onClick={logoutCustomer}
+            onClick={handleSignOut}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 dark:border-rose-500/30 rounded-lg text-xs font-semibold transition-colors shadow-2xs"
             title="Sign out of account"
           >

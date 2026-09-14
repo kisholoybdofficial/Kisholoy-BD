@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Menu, X, ExternalLink, UserCheck, 
@@ -22,9 +22,9 @@ import { AdminErrorBoundary } from '../components/admin/AdminErrorBoundary';
 import { useAdminTactileFeedback } from '../hooks/useAdminTactileFeedback';
 import { AdminTactileProvider } from '../context/AdminTactileContext';
 import { StaffLoginScreen } from './StaffLoginScreen';
-import { getStaffToken, setStaffToken } from '../lib/apiClient';
-import { isAdminRole, canAccessAdminRoute, verifyIsAdminWithClaims, verifyUserRole } from '../lib/auth';
-import { auth } from '../lib/firebase';
+import { AUTH_EXPIRED_EVENT } from '../lib/apiClient';
+import { isAdminRole, canAccessAdminRoute, fetchStaffSession, logoutStaff } from '../lib/auth';
+import { useSeo } from '../lib/seo';
 
 /**
  * Unified route monitoring hook that logs and validates active admin sub-menu navigation
@@ -121,6 +121,7 @@ const ROLE_LABELS_BN: Record<Role, string> = {
   INVENTORY_MANAGER: 'ইনভেন্টরি ম্যানেজার',
   FINANCE: 'ফাইন্যান্স ম্যানেজার',
   SUPPORT: 'কাস্টমার সাপোর্ট',
+  STAFF: 'স্টাফ (রিড-অনলি)',
   SUPPLIER: 'সাপ্লায়ার',
   MERCHANT: 'মার্চেন্ট',
   CUSTOMER: 'সাধারণ গ্রাহক',
@@ -195,93 +196,72 @@ function AdminLayoutContent() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Real Staff Authentication Guard
-  const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
-    return Boolean(getStaffToken());
-  });
-  const [authChecking, setAuthChecking] = useState<boolean>(true);
+  // ── Server-authoritative staff session ───────────────────────────────────
+  // The old version decided "am I an admin?" from `localStorage` and, if the
+  // verify call *threw*, fell back to `Boolean(getStaffToken()) &&
+  // isAdminRole(currentRole)` — with `currentRole` defaulting to SUPER_ADMIN.
+  // A network blip therefore meant "authenticated super admin". Now the only
+  // source of truth is GET /api/security/auth/session, resolved from an httpOnly
+  // signed cookie, and any failure means signed out (fail closed).
+  const [isStaffAuthenticated, setIsStaffAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [sessionUser, setSessionUser] = useState<{ name: string; email: string; role: Role } | null>(null);
+
+  const applySession = useCallback(
+    (session: Awaited<ReturnType<typeof fetchStaffSession>>) => {
+      if (session.valid && session.role && isAdminRole(session.role)) {
+        setIsStaffAuthenticated(true);
+        setMustChangePassword(session.mustChangePassword);
+        setSessionUser({
+          name: session.user?.name || 'Staff',
+          email: session.user?.email || '',
+          role: session.role as Role,
+        });
+        setCurrentRole(session.role as Role);
+      } else {
+        setIsStaffAuthenticated(false);
+        setSessionUser(null);
+        setMustChangePassword(false);
+        setCurrentRole('CUSTOMER');
+      }
+    },
+    [setCurrentRole]
+  );
 
   useEffect(() => {
     let isMounted = true;
-    const token = getStaffToken();
-
-    if (!token) {
-      // Check Firebase Auth state directly for custom claims
-      const currentUser = auth.currentUser;
-      if (currentUser) {
-        verifyIsAdminWithClaims(currentUser).then((isAdmin) => {
-          if (!isMounted) return;
-          if (isAdmin) {
-            verifyUserRole(currentUser).then((role) => {
-              if (!isMounted) return;
-              setIsStaffAuthenticated(true);
-              setCurrentRole(role);
-              setAuthChecking(false);
-            });
-            return;
-          }
-          setIsStaffAuthenticated(false);
-          setAuthChecking(false);
-        });
-        return;
-      }
-      setIsStaffAuthenticated(false);
-      setAuthChecking(false);
-      return;
-    }
-
-    fetch('/api/security/auth/verify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ token })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (!isMounted) return;
-        if (data.valid && data.role && isAdminRole(data.role)) {
-          setIsStaffAuthenticated(true);
-          setCurrentRole(data.role);
-        } else {
-          setStaffToken(null);
-          setIsStaffAuthenticated(false);
-        }
+    fetchStaffSession()
+      .then((session) => {
+        if (isMounted) applySession(session);
       })
       .catch(() => {
-        if (!isMounted) return;
-        setIsStaffAuthenticated(Boolean(getStaffToken()) && isAdminRole(currentRole));
+        if (isMounted) applySession({ valid: false, user: null, role: null, permissions: [], mustChangePassword: false, twoFactorEnabled: false });
       })
       .finally(() => {
         if (isMounted) setAuthChecking(false);
       });
 
+    // A 401 from any staff-guarded endpoint means the session died: drop the
+    // shell back to the sign-in gate instead of leaving a live-looking panel.
+    const onExpired = () => {
+      if (!isMounted) return;
+      applySession({ valid: false, user: null, role: null, permissions: [], mustChangePassword: false, twoFactorEnabled: false });
+      setAuthChecking(false);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
     return () => {
       isMounted = false;
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
     };
-  }, [setCurrentRole, currentRole]);
+  }, [applySession]);
 
   const handleAdminLogout = async () => {
-    const token = getStaffToken();
-    try {
-      if (token) {
-        await fetch('/api/security/auth/logout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ token })
-        });
-      }
-    } catch {
-      // ignore network errors
-    }
-    setStaffToken(null);
+    await logoutStaff();
     setIsStaffAuthenticated(false);
+    setSessionUser(null);
     setCurrentRole('CUSTOMER');
-    showToast(isBn ? 'সফলভাবে অ্যাডমিন লগআউট সম্পন্ন হয়েছে।' : 'Admin session logged out successfully.');
+    showToast(isBn ? 'সফলভাবে অ্যাডমিন লগআউট সম্পন্ন হয়েছে।' : 'Admin session logged out successfully.');
   };
 
   // Sidebar accordion: default all sections expanded for full visibility of all submenus
@@ -370,6 +350,23 @@ function AdminLayoutContent() {
     return canAccessAdminRoute(currentRole, itemPath);
   };
 
+  /**
+   * The control panel — including the sign-in, 2FA and forced-password-change
+   * screens rendered below — must never reach a search index: robots.txt
+   * disallows /admin and every one of these routes emits noindex,nofollow.
+   */
+  useSeo(
+    {
+      title: isStaffAuthenticated ? 'Control panel | Kisholoy' : 'Staff sign-in | Kisholoy',
+      titleBn: isStaffAuthenticated ? 'কন্ট্রোল প্যানেল | কিশলয়' : 'স্টাফ সাইন-ইন | কিশলয়',
+      description: 'Authenticated staff area.',
+      path: '/admin',
+      private: true,
+      locale: isBn ? 'bn' : 'en',
+    },
+    [isBn, isStaffAuthenticated, authChecking, location.pathname]
+  );
+
   if (authChecking) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-stone-100 dark:bg-slate-950 text-stone-900 dark:text-slate-100">
@@ -437,27 +434,6 @@ function AdminLayoutContent() {
             </span>
             <span className="hidden xl:inline text-stone-500 dark:text-stone-400 font-normal">| {isBn ? 'অ্যাক্সেস রুলস' : 'Permissions'}</span>
           </button>
-
-          {/* Quick Role Persona Switcher */}
-          <div className="hidden sm:flex min-h-[44px] items-center gap-2 bg-stone-100 dark:bg-stone-900 px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-800">
-            <UserCheck className="w-4 h-4 text-stone-500 dark:text-stone-400" />
-            <select
-              id="admin-role-selector"
-              value={currentRole}
-              onChange={(e) => {
-                const newR = e.target.value as Role;
-                setCurrentRole(newR);
-                showToast(isBn ? `ভূমিকা পরিবর্তন করা হয়েছে: ${ROLE_LABELS_BN[newR] || newR}` : `Switched active role to ${newR}`);
-              }}
-              className="bg-transparent text-xs font-bold text-stone-800 dark:text-stone-200 focus:outline-none cursor-pointer"
-            >
-              {roles.map((r) => (
-                <option key={r} value={r} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-white">
-                  {isBn ? (ROLE_LABELS_BN[r] || r.replace('_', ' ')) : r.replace('_', ' ')}
-                </option>
-              ))}
-            </select>
-          </div>
 
           {/* Real-time Notification Alert Center (Fraud Risks, Pending Settlements, RMA) */}
           <AdminNotificationAlerts />

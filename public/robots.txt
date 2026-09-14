@@ -1,0 +1,13 @@
+# https://www.robotstxt.org/
+# Private areas are disallowed AND marked noindex by the app itself
+# (see src/lib/seo.ts), so a link to them cannot leak into search results.
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /account
+Disallow: /checkout
+Disallow: /order-confirmation
+Disallow: /supplier
+Disallow: /api/
+
+Sitemap: /sitemap.xml

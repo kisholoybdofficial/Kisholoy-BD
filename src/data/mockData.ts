@@ -789,6 +789,24 @@ export const INITIAL_CUSTOMERS: Customer[] = [
 ];
 
 export const INITIAL_CONTENT: SiteContent = {
+  /**
+   * Homepage/search defaults. Owned by Admin → Content Studio → SEO & Sharing;
+   * the storefront only falls back to these values, never to code-level strings.
+   */
+  seo: {
+    title: 'KISHOLOY | Premium Bangladesh E-Commerce — Food, Handmade, Home & Lifestyle',
+    titleBn: 'কিশলয় | বাংলাদেশের প্রিমিয়াম ই-কমার্স — খাবার, হস্তশিল্প, ঘর ও লাইফস্টাইল',
+    description:
+      'Kisholoy sources in-house and artisan products across Bangladesh — grocery, snacks, handmade craft, home, beauty, apparel, electronics and gifts — with nationwide delivery.',
+    descriptionBn:
+      'কিশলয় বাংলাদেশজুড়ে নিজস্ব ও কারিগরের পণ্য সংগ্রহ করে—মুদি, নাশতা, হস্তশিল্প, ঘর, প্রসাধন, পোশাক, ইলেকট্রনিকস ও উপহার—সদেশে ডেলিভারিসহ।',
+    ogImage: '/brand/kisholoy-og.png',
+    keywords: [
+      'Kisholoy', 'কিশলয়', 'Bangladesh online shopping', 'handmade Bangladesh',
+      'jamdani', 'terracotta', 'organic grocery Bangladesh', 'cash on delivery BD',
+    ],
+    noindex: false,
+  },
   brandName: 'KISHOLOY',
   brandNameBn: 'কিশলয়',
   tagline: 'Artisanal Heritage & Natural Living',

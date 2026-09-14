@@ -3,9 +3,44 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Sparkles, Award, ShieldCheck, HeartHandshake, MapPin, Truck, CheckCircle2 } from 'lucide-react';
 import { ProductGrid } from '../components/ProductGrid';
 import { useApp } from '../context/AppContext';
+import { useSeo, itemListStructuredData } from '../lib/seo';
+import { ProductImage } from '../components/ProductImage';
 
 export function Home() {
   const { siteContent, categories, language } = useApp();
+  useSeo({
+    title: siteContent?.seo?.title || 'Premium Bangladesh E-Commerce — Food, Handmade, Home & Lifestyle',
+    titleBn: siteContent?.seo?.titleBn || 'বাংলাদেশের প্রিমিয়াম ই-কমার্স — খাবার, হস্তশিল্প, ঘর ও লাইফস্টাইল',
+    description: siteContent?.seo?.description || 'Kisholoy sources in-house and artisan products across Bangladesh — grocery, snacks, handmade craft, home, beauty, apparel, electronics and gifts — with nationwide delivery.',
+    descriptionBn: 'কিশলয় বাংলাদেশজুড়ে নিজস্ব ও কারিগরের পণ্য সংগ্রহ করে—মুদি, নাশতা, হস্তশিল্প, ঘর, প্রসাধন, পোশাক, ইলেকট্রনিকস ও উপহার—সদেশে ডেলিভারিসহ।',
+    path: '/',
+    image: siteContent?.seo?.ogImage || '/brand/kisholoy-og.png',
+    locale: language === 'BN' ? 'bn' : 'en',
+    structuredData: [
+      {
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      name: 'KISHOLOY',
+      alternateName: 'কিশলয়',
+      url: typeof window !== 'undefined' ? window.location.origin : '',
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: { '@type': 'EntryPoint', urlTemplate: `${typeof window !== 'undefined' ? window.location.origin : ''}/shop?q={search_term_string}` },
+        'query-input': 'required name=search_term_string',
+      },
+      },
+      // The category rail is the crawlable spine of the storefront: publish it as
+      // an ItemList so each collection has a discoverable entry point.
+      itemListStructuredData(
+        (categories || []).slice(0, 12).map((cat) => ({
+          name: language === 'BN' ? cat.nameBn || cat.name : cat.name,
+          url: `${typeof window !== 'undefined' ? window.location.origin : ''}/category/${cat.slug}`,
+        })),
+        'Kisholoy collections'
+      ),
+    ],
+  });
+
 
   const sec = siteContent.sectionSettings || {
     showAnnouncement: true,
@@ -34,10 +69,12 @@ export function Home() {
         <section className="relative bg-stone-950 text-white overflow-hidden mx-3 sm:mx-4 lg:mx-8 rounded-2xl sm:rounded-3xl mt-2 sm:mt-4 border border-stone-800/90 shadow-2xl">
           {/* Background image & gradient overlay */}
           <div className="absolute inset-0 z-0">
-            <img
+            <ProductImage
               src={siteContent.hero.image}
               alt="Kisholoy Heritage"
-              className="w-full h-full object-cover object-center scale-102 transform duration-1000"
+              fill
+              priority
+              imgClassName="object-cover object-center scale-102 transform duration-1000"
             />
             <div 
               className="absolute inset-0 bg-gradient-to-r from-stone-950 via-stone-950/85 to-stone-950/40"
@@ -108,10 +145,11 @@ export function Home() {
                 to={promo.link || '/shop'}
                 className="group relative h-40 sm:h-52 rounded-xl sm:rounded-2xl overflow-hidden border border-stone-200/90 dark:border-slate-800 shadow-xs hover:shadow-xl hover:border-stone-300 transition-all duration-300 flex flex-col justify-end p-4 sm:p-6 text-white"
               >
-                <img
+                <ProductImage
                   src={promo.image}
                   alt={promo.title}
-                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-106 transition-transform duration-700 ease-out"
+                  fill
+                  imgClassName="group-hover:scale-106 transition-transform duration-700 ease-out"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/60 to-transparent"></div>
                 <div className="relative z-10 space-y-1 sm:space-y-1.5">
@@ -161,10 +199,11 @@ export function Home() {
                 to={`/category/${cat.slug}`}
                 className="group relative h-44 sm:h-64 lg:h-72 rounded-xl sm:rounded-2xl overflow-hidden border border-stone-200/80 dark:border-slate-800 shadow-xs hover:shadow-xl transition-all duration-300 flex flex-col justify-end p-3 sm:p-5"
               >
-                <img
+                <ProductImage
                   src={cat.image}
-                  alt={cat.name}
-                  className="absolute inset-0 w-full h-full object-cover object-center group-hover:scale-108 transition-transform duration-700 ease-out"
+                  alt={language === 'BN' ? cat.nameBn : cat.name}
+                  fill
+                  imgClassName="object-cover object-center group-hover:scale-108 transition-transform duration-700 ease-out"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/50 to-transparent"></div>
                 
@@ -239,11 +278,11 @@ export function Home() {
                 </Link>
               </div>
             </div>
-            <div className="w-full lg:w-96 aspect-4/3 rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border border-stone-700/80 shrink-0">
-              <img
-                src={sec.artisanImage || "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&q=80&w=800"}
+            <div className="relative w-full lg:w-96 aspect-4/3 rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border border-stone-700/80 shrink-0">
+              <ProductImage
+                src={sec.artisanImage}
                 alt="Artisan Craftsmanship"
-                className="w-full h-full object-cover"
+                fill
               />
             </div>
           </div>

@@ -3,9 +3,23 @@ import { useSearchParams } from 'react-router-dom';
 import { Filter, SlidersHorizontal, ArrowUpDown, X, Sparkles, Check, RotateCcw } from 'lucide-react';
 import { ProductCard } from '../components/ProductCard';
 import { useApp } from '../context/AppContext';
+import { useSeo, itemListStructuredData } from '../lib/seo';
 
 export function Shop() {
   const { products, categories, language } = useApp();
+  useSeo({
+    title: 'Shop all products',
+    titleBn: 'সব পণ্য দেখুন',
+    description: 'Browse the full Kisholoy catalogue: food and snacks, grocery, handmade craft, home and kitchen, beauty, apparel, electronics accessories, stationery and gifts.',
+    descriptionBn: 'কিশলয়ের পুরো ক্যাটালগ—খাবার, মুদি, হস্তশিল্প, ঘর ও রান্নাঘর, প্রসাধন, পোশাক, ইলেকট্রনিকস, স্টেশনারি ও উপহার।',
+    path: '/shop',
+    locale: language === 'BN' ? 'bn' : 'en',
+    structuredData: itemListStructuredData(
+      products.slice(0, 24).map((p) => ({ name: language === 'BN' ? p.titleBn || p.title : p.title, url: `${window.location.origin}/product/${p.slug}` })),
+      'Kisholoy catalogue'
+    ),
+  });
+
   const [searchParams, setSearchParams] = useSearchParams();
 
   const currentCategory = searchParams.get('category') || 'all';

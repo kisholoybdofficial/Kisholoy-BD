@@ -240,6 +240,27 @@ export const IdentityAccessModal: React.FC<IdentityAccessModalProps> = ({
       whoManages: 'Admin or Super Administrator.',
       badgeColor: 'bg-stone-100 text-stone-900 border-stone-200'
     },
+    STAFF: {
+      title: 'Staff (read-only)',
+      titleBn: 'স্টাফ (শুধু দেখা)',
+      description: 'Internal helper account for support conversations. Can look at orders, catalogue and stock; cannot change prices, money, settings or roles.',
+      canAccess: [
+        'Order List & Order Detail (read-only)',
+        'Product Catalogue & Stock Levels',
+        'Customer Profile Summary',
+        'Supplier Directory (read-only)'
+      ],
+      canChange: ['Nothing — this role is intentionally read-only'],
+      cannotChange: [
+        'Prices, discounts, coupons or payouts',
+        'Inventory adjustments',
+        'Staff roles, permissions or security settings',
+        'Store content and settings'
+      ],
+      whoManages: 'Created and managed by a Super Administrator only.',
+      badgeColor: 'bg-stone-100 text-stone-700 border-stone-300'
+    },
+
     CUSTOMER: {
       title: 'Shopper / Customer Account',
       titleBn: 'গ্রাহক অ্যাকাউন্ট',

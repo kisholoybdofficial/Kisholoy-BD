@@ -91,6 +91,10 @@ export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
   { methods: WRITE, pattern: /^\/api\/suppliers\/[^/]+\/toggle-portal/, permission: 'SECURITY_ADMIN', note: 'vendor portal access' },
   { methods: WRITE, pattern: /^\/api\/suppliers\/.*\/(pos|purchase-orders)/, permission: 'PURCHASE_CREATE' },
   { methods: WRITE, pattern: /^\/api\/suppliers\/.*settlement/, permission: 'suppliers:pay', note: 'paying a vendor' },
+  // Recording an actual payout is finance work, not vendor bookkeeping:
+  // SUPPLIER_MANAGE (held by INVENTORY_MANAGER for stock receiving) must not
+  // be able to move money out.
+  { methods: WRITE, pattern: /^\/api\/suppliers\/[^/]+\/payments/, permission: 'suppliers:pay', note: 'paying a vendor' },
   { methods: WRITE, pattern: /^\/api\/suppliers/, permission: 'SUPPLIER_MANAGE' },
   { methods: READ, pattern: /^\/api\/suppliers/, permission: 'SUPPLIER_VIEW' },
 

@@ -10,7 +10,7 @@ TOKEN="${TOKEN:-}"
 if [[ -z "$TOKEN" ]]; then
   TOKEN=$(curl -s --max-time 15 "$BASE/api/security/auth/login" \
     -H 'Content-Type: application/json' \
-    -d "{\"email\":\"${STAFF_EMAIL:-admin@kisholoy.com}\",\"password\":\"${STAFF_PASSWORD:-Kisholoy@2026!}\"}" \
+    -d "{\"email\":\"${STAFF_EMAIL:?set STAFF_EMAIL to a test account}\",\"password\":\"${STAFF_PASSWORD:?set STAFF_PASSWORD explicitly - no credential may be committed}\"}" \
     | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 fi
 if [[ -z "$TOKEN" ]]; then

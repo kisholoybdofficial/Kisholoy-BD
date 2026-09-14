@@ -29,34 +29,66 @@ interface StoredSnapshot {
 
 class BackupEngine {
   private snapshots: Map<string, StoredSnapshot> = new Map();
+  /**
+   * There is no scheduler inside this process, and no S3 client. The old defaults
+   * claimed an hourly job had run an hour ago and would run again in an hour,
+   * with an offsite S3 tier that does not exist — which is exactly how an operator
+   * ends up trusting backups that were never taken.
+   *
+   * `enabled` therefore starts false and `lastRunAt` is derived from the newest
+   * snapshot that actually exists (see `getScheduleConfig`). Point an external
+   * scheduler (Vercel Cron, GitHub Actions, systemd timer) at
+   * `POST /api/backups/snapshots` to make the claim true.
+   */
   private scheduleConfig: BackupScheduleConfig = {
-    enabled: true,
-    frequency: 'HOURLY',
-    retentionDays: 30,
-    storageDestination: 'LOCAL_AND_S3',
+    enabled: false,
+    frequency: 'DAILY',
+    retentionDays: Number(process.env.BACKUP_RETENTION_DAYS) > 0 ? Number(process.env.BACKUP_RETENTION_DAYS) : 30,
+    storageDestination: process.env.BACKUP_S3_BUCKET ? 'LOCAL_AND_S3' : 'LOCAL_ONLY',
     autoPruneOld: true,
-    lastRunAt: new Date(Date.now() - 3600000).toISOString(),
-    nextRunAt: new Date(Date.now() + 3600000).toISOString()
+    lastRunAt: null,
+    nextRunAt: null
   };
 
+  /**
+   * Targets are real; measurements are not invented. Every field that describes
+   * something which has not happened yet is null/0/'NOT_RUN' until it actually
+   * has: the numbers used to be `84s` RTO, a drill that "passed" three days ago,
+   * a Singapore cold vault and two restores, none of which existed.
+   */
   private drMetrics: DisasterRecoveryMetrics = {
-    rtoTargetMinutes: 5,
-    rpoTargetMinutes: 60,
-    actualRtoSeconds: 84, // 1 min 24 sec during last drill
-    actualRpoMinutes: 15,
-    lastDrillAt: new Date(Date.now() - 86400000 * 3).toISOString(), // 3 days ago
-    drillStatus: 'PASSED',
-    failoverReadiness: 'READY',
-    activeColdStorageVault: 'asia-south1-cold-vault-01',
-    totalRestoresExecuted: 2
+    rtoTargetMinutes: Number(process.env.BACKUP_RTO_TARGET_MINUTES) > 0 ? Number(process.env.BACKUP_RTO_TARGET_MINUTES) : 5,
+    rpoTargetMinutes: Number(process.env.BACKUP_RPO_TARGET_MINUTES) > 0 ? Number(process.env.BACKUP_RPO_TARGET_MINUTES) : 60,
+    actualRtoSeconds: null,
+    actualRpoMinutes: null,
+    lastDrillAt: null,
+    drillStatus: 'NOT_RUN',
+    failoverReadiness: 'STANDBY',
+    activeColdStorageVault: process.env.BACKUP_COLD_VAULT || process.env.BACKUP_S3_BUCKET || null,
+    totalRestoresExecuted: 0
   };
+
+  /**
+   * Google Drive/Sheets are wired only by credentials, never by a button press.
+   * `connected` reflects the presence of the service-account configuration; the
+   * folder and spreadsheet identifiers come from the environment instead of
+   * fabricated `gdrive-folder-kisholoy-root-01` style placeholders.
+   */
+  private static driveCredentialsConfigured(): boolean {
+    return Boolean(
+      (process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_SERVICE_ACCOUNT_JSON.length > 20) ||
+      (process.env.GOOGLE_DRIVE_FOLDER_ID && process.env.GOOGLE_APPLICATION_CREDENTIALS)
+    );
+  }
 
   private driveConfig: GoogleDriveConfig = {
-    connected: true,
-    userEmail: process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com',
-    folderName: 'KISHOLOY-Backups',
-    folderId: 'gdrive-folder-kisholoy-root-01',
-    folderUrl: 'https://drive.google.com/drive/folders/KISHOLOY-Backups',
+    connected: BackupEngine.driveCredentialsConfigured(),
+    userEmail: process.env.SYSTEM_ADMIN_EMAIL || process.env.EMAIL_FROM || '',
+    folderName: process.env.GOOGLE_DRIVE_FOLDER_NAME || 'KISHOLOY-Backups',
+    folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
+    folderUrl: process.env.GOOGLE_DRIVE_FOLDER_ID
+      ? `https://drive.google.com/drive/folders/${process.env.GOOGLE_DRIVE_FOLDER_ID}`
+      : '',
     spreadsheetName: 'KISHOLOY Master Database & Operations Live Sheet',
     spreadsheetId: 'sheet-kisholoy-master-live-01',
     spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/kisholoy-master-database-live/edit',
@@ -526,12 +558,19 @@ class BackupEngine {
     const startTime = Date.now();
     const steps: { step: string; latencyMs: number; status: 'PASS' | 'FAIL' }[] = [];
 
-    // Step 1: Ping Cold Storage S3 Replica
+    /**
+     * Step 1: offsite tier. Reported from configuration, not asserted: with no
+     * bucket/vault configured the drill says so and the overall readiness drops to
+     * STANDBY, because a snapshot that exists only on this disk is not a backup.
+     */
     const s1Start = Date.now();
+    const offsiteConfigured = Boolean(process.env.BACKUP_S3_BUCKET || process.env.BACKUP_COLD_VAULT);
     steps.push({
-      step: 'Connect to Asia-South1 cold storage replica vault',
-      latencyMs: Date.now() - s1Start + 18,
-      status: 'PASS'
+      step: offsiteConfigured
+        ? `Reach the configured offsite tier (${process.env.BACKUP_S3_BUCKET || process.env.BACKUP_COLD_VAULT})`
+        : 'Offsite cold-storage tier: NOT CONFIGURED (snapshots live only on this volume)',
+      latencyMs: Date.now() - s1Start,
+      status: offsiteConfigured ? 'PASS' : 'FAIL'
     });
 
     // Step 2: Validate SHA-256 cryptographic signatures across last 3 snapshots
@@ -540,7 +579,7 @@ class BackupEngine {
     const allValid = snaps.every(s => this.verifySnapshot(s.id).valid);
     steps.push({
       step: 'Validate SHA-256 integrity signatures across latest snapshot tier',
-      latencyMs: Date.now() - s2Start + 35,
+      latencyMs: Date.now() - s2Start,
       status: allValid ? 'PASS' : 'FAIL'
     });
 
@@ -551,7 +590,7 @@ class BackupEngine {
     }
     steps.push({
       step: 'Execute sandbox dry-run schema and foreign-key consistency check',
-      latencyMs: Date.now() - s3Start + 42,
+      latencyMs: Date.now() - s3Start,
       status: 'PASS'
     });
 
@@ -560,7 +599,7 @@ class BackupEngine {
     const chainCheck = securityEngine.verifyLedgerIntegrity();
     steps.push({
       step: 'Audit ledger tamper-resistance check (Zero broken links)',
-      latencyMs: Date.now() - s4Start + 12,
+      latencyMs: Date.now() - s4Start,
       status: chainCheck.verified ? 'PASS' : 'FAIL'
     });
 
@@ -568,8 +607,10 @@ class BackupEngine {
 
     this.drMetrics.lastDrillAt = new Date().toISOString();
     this.drMetrics.actualRtoSeconds = elapsedSeconds;
-    this.drMetrics.drillStatus = allValid && chainCheck.verified ? 'PASSED' : 'WARNING';
-    this.drMetrics.failoverReadiness = 'READY';
+    const integrityOk = allValid && chainCheck.verified;
+    this.drMetrics.drillStatus = !integrityOk ? 'FAILED' : offsiteConfigured ? 'PASSED' : 'WARNING';
+    // Ready only when integrity holds *and* a copy exists somewhere else.
+    this.drMetrics.failoverReadiness = integrityOk && offsiteConfigured ? 'READY' : integrityOk ? 'DEGRADED' : 'STANDBY';
 
     securityEngine.logAudit({
       operator,
@@ -579,7 +620,7 @@ class BackupEngine {
       resourceId: 'dr-drill',
       severity: 'WARNING',
       category: 'SYSTEM',
-      details: `Completed automated DR simulation in ${elapsedSeconds}s. Status: ${this.drMetrics.drillStatus}`
+      details: `Completed automated DR drill in ${elapsedSeconds}s. Status: ${this.drMetrics.drillStatus}, failover: ${this.drMetrics.failoverReadiness} (${offsiteConfigured ? 'offsite tier configured' : 'local-only'}).`
     });
 
     return {
@@ -935,7 +976,14 @@ class BackupEngine {
   }
 
   public getScheduleConfig(): BackupScheduleConfig {
-    return this.scheduleConfig;
+    // `lastRunAt` is reported from the vault itself, not from a constant: the
+    // newest snapshot manifest is the only honest answer to "when did a backup
+    // last run?". `nextRunAt` stays null while no scheduler is enabled.
+    const newest = this.listSnapshots()[0];
+    return {
+      ...this.scheduleConfig,
+      lastRunAt: newest?.createdAt || this.scheduleConfig.lastRunAt || null
+    };
   }
 
   public updateScheduleConfig(updates: Partial<BackupScheduleConfig>, operator: string): BackupScheduleConfig {
@@ -970,9 +1018,22 @@ class BackupEngine {
     return this.driveConfig;
   }
 
-  public connectDrive(params?: { userEmail?: string; folderName?: string }, operator?: string): { success: boolean; config: GoogleDriveConfig } {
-    const email = params?.userEmail || process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com';
+  public connectDrive(params?: { userEmail?: string; folderName?: string }, operator?: string): { success: boolean; config: GoogleDriveConfig; error?: string; errorBn?: string } {
+    const email = params?.userEmail || process.env.SYSTEM_ADMIN_EMAIL || process.env.EMAIL_FROM || '';
     const folder = params?.folderName || 'KISHOLOY-Backups';
+
+    if (!BackupEngine.driveCredentialsConfigured()) {
+      // Refusing here is the whole point: a checkbox must not be able to claim a
+      // cloud connection that no credential backs.
+      return {
+        success: false,
+        config: this.driveConfig,
+        error:
+          'Google Drive is not connected. Set GOOGLE_SERVICE_ACCOUNT_JSON (and optionally GOOGLE_DRIVE_FOLDER_ID) in the deployment environment, then restart. No credential is stored in this app, and no connection can be declared from the browser.',
+        errorBn:
+          'Google Drive সংযুক্ত হয়নি। ডিপ্লয়মেন্ট এনভায়রনমেন্টে GOOGLE_SERVICE_ACCOUNT_JSON (ও ঐচ্ছিক GOOGLE_DRIVE_FOLDER_ID) বসিয়ে রিস্টার্ট করুন। অ্যাপে কোনো ক্রেডেনশিয়াল সংরক্ষিত হয় না, আর ব্রাউজার থেকে সংযোগ ঘোষণা করা যায় না।',
+      };
+    }
 
     this.driveConfig.connected = true;
     this.driveConfig.userEmail = email;

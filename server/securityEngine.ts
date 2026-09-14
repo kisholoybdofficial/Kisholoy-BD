@@ -280,178 +280,34 @@ class SecurityEngine {
     return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
   }
 
+  /**
+   * Intentionally inert — kept as a no-op so the constructor keeps compiling.
+   *
+   * It used to insert two administrators — the maintainer's personal mailbox and
+   * a fake `admin@` account — whose passwords were literals *in this file*,
+   * hashed with a pbkdf2 salt shared by every deployment,
+   * plus a 365-day SUPER_ADMIN session token. Anyone who read the source could
+   * sign in, and the literals travelled into the deployed serverless bundle.
+   * `tests/serverless-bundle.test.ts` asserts those strings never reach an
+   * artifact.
+   *
+   * Staff identity lives in `server/security/staffStore.ts` only: environment
+   * bootstrap + durable store, scrypt hashes, lockout, 2FA, forced rotation.
+   */
   private initializeAdminUsers() {
-    const defaultSalt = 'kisholoy_bd_salt_99812';
-    const defaultPasswordHash = this.hashPassword('Kisholoy@2026!', defaultSalt);
-    const superAdminPasswordHash = this.hashPassword('KisholoySuperAdmin@2026!', defaultSalt);
-
-    const initialStaff: (AdminUser & { passwordHash: string; salt: string })[] = [
-      {
-        id: 'adm-000',
-        name: 'Kisholoy Official Super Admin',
-        email: 'kisholoybd.official@gmail.com',
-        phone: '+8801700000000',
-        role: 'SUPER_ADMIN',
-        status: 'ACTIVE',
-        twoFactorEnabled: false,
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date().toISOString(),
-        lastLoginIp: '127.0.0.1',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-        passwordHash: superAdminPasswordHash,
-        salt: defaultSalt
-      },
-      {
-        id: 'adm-001',
-        name: 'Arifur Rahman (Chief Admin)',
-        email: 'admin@kisholoy.com',
-        phone: '+8801711000001',
-        role: 'SUPER_ADMIN',
-        status: 'ACTIVE',
-        twoFactorEnabled: true,
-        twoFactorMethod: 'APP_TOTP',
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-        lastLoginIp: '103.145.118.22',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-        passwordHash: defaultPasswordHash,
-        salt: defaultSalt
-      },
-      {
-        id: 'adm-002',
-        name: 'Nusrat Jahan (Ops Lead)',
-        email: 'orders@kisholoy.com',
-        phone: '+8801811000002',
-        role: 'ORDER_MANAGER',
-        status: 'ACTIVE',
-        twoFactorEnabled: false,
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date(Date.now() - 1000 * 60 * 65).toISOString(),
-        lastLoginIp: '103.145.118.56',
-        createdAt: '2026-01-10T00:00:00.000Z',
-        updatedAt: '2026-01-10T00:00:00.000Z',
-        passwordHash: defaultPasswordHash,
-        salt: defaultSalt
-      },
-      {
-        id: 'adm-003',
-        name: 'Tanvir Ahmed (Warehouse Hub)',
-        email: 'inventory@kisholoy.com',
-        phone: '+8801911000003',
-        role: 'INVENTORY_MANAGER',
-        status: 'ACTIVE',
-        twoFactorEnabled: false,
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-        lastLoginIp: '103.145.118.34',
-        createdAt: '2026-01-15T00:00:00.000Z',
-        updatedAt: '2026-01-15T00:00:00.000Z',
-        passwordHash: defaultPasswordHash,
-        salt: defaultSalt
-      },
-      {
-        id: 'adm-004',
-        name: 'Farhana Yasmin (Accounts)',
-        email: 'finance@kisholoy.com',
-        phone: '+8801611000004',
-        role: 'FINANCE',
-        status: 'ACTIVE',
-        twoFactorEnabled: true,
-        twoFactorMethod: 'SMS_OTP',
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date(Date.now() - 1000 * 60 * 240).toISOString(),
-        lastLoginIp: '103.145.118.45',
-        createdAt: '2026-01-20T00:00:00.000Z',
-        updatedAt: '2026-01-20T00:00:00.000Z',
-        passwordHash: defaultPasswordHash,
-        salt: defaultSalt
-      },
-      {
-        id: 'adm-005',
-        name: 'Mahmud Hasan (Support)',
-        email: 'support@kisholoy.com',
-        phone: '+8801511000005',
-        role: 'SUPPORT',
-        status: 'ACTIVE',
-        twoFactorEnabled: false,
-        failedLoginAttempts: 0,
-        lastLoginAt: new Date(Date.now() - 1000 * 60 * 300).toISOString(),
-        lastLoginIp: '103.145.118.89',
-        createdAt: '2026-02-01T00:00:00.000Z',
-        updatedAt: '2026-02-01T00:00:00.000Z',
-        passwordHash: defaultPasswordHash,
-        salt: defaultSalt
-      }
-    ];
-
-    for (const u of initialStaff) {
-      this.adminUsers.set(u.id, u);
-    }
-
-    // Development & Control plane session: a pre-authenticated Super Admin session
-    // so the admin panel, demo seed, and smoke suites can call the API reliably.
-    const initialSessionToken = 'ksh-token-super-admin-root-session-2026';
-    this.activeSessions.set(initialSessionToken, {
-      sessionId: 'sess-000001',
-      token: initialSessionToken,
-      userId: 'adm-001',
-      userName: 'Arifur Rahman (Chief Admin)',
-      userEmail: 'admin@kisholoy.com',
-      role: 'SUPER_ADMIN',
-      ipAddress: '103.145.118.22',
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) KisholoyControlPlane/2.0',
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toISOString(), // Long-lived for control plane
-      lastActiveAt: new Date().toISOString()
-    });
+    this.adminUsers.clear();
+    this.activeSessions.clear();
   }
 
-  public getOrCreatePersonaSession(requestedRole: Role = 'SUPER_ADMIN', ip = '127.0.0.1', userAgent = 'KisholoyAdminClient'): {
-    success: boolean;
-    token: string;
-    session: AdminSession;
-    user: Omit<AdminUser, 'passwordHash' | 'salt'>;
-    role: Role;
-  } {
-    let userEntry = Array.from(this.adminUsers.values()).find(u => u.role === requestedRole);
-    if (!userEntry) {
-      userEntry = Array.from(this.adminUsers.values()).find(u => u.role === 'SUPER_ADMIN') || Array.from(this.adminUsers.values())[0];
-    }
-    if (!userEntry) {
-      this.initializeAdminUsers();
-      userEntry = Array.from(this.adminUsers.values())[0];
-    }
-
-    const sessionToken = `ksh-persona-${(requestedRole || 'super_admin').toLowerCase()}-${Date.now().toString(36)}-${crypto.randomBytes(8).toString('hex')}`;
-    const sessionId = `sess-persona-${Date.now()}`;
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(); // 30 days
-
-    const session: AdminSession = {
-      sessionId,
-      token: sessionToken,
-      userId: userEntry.id,
-      userName: userEntry.name,
-      userEmail: userEntry.email,
-      role: requestedRole,
-      ipAddress: ip,
-      userAgent: (userAgent || 'KisholoyAdminClient').slice(0, 100),
-      createdAt: new Date().toISOString(),
-      expiresAt,
-      lastActiveAt: new Date().toISOString()
-    };
-
-    this.activeSessions.set(sessionToken, session);
-
-    const { passwordHash, salt, ...safeUser } = userEntry;
-    return {
-      success: true,
-      token: sessionToken,
-      session,
-      user: { ...safeUser, role: requestedRole },
-      role: requestedRole
-    };
+  /**
+   * REMOVED (Phase 2). Minting a session for an arbitrary requested role with no
+   * password was an authentication bypass, not a convenience. Sign in through
+   * `POST /api/security/auth/login`, which enforces credentials, lockout and 2FA.
+   */
+  public getOrCreatePersonaSession(_requestedRole?: Role, _ip?: string, _userAgent?: string): never {
+    throw new Error(
+      'getOrCreatePersonaSession was removed: it issued SUPER_ADMIN sessions without authentication. Use POST /api/security/auth/login.'
+    );
   }
 
   public getAdminUsers(): AdminUser[] {
@@ -462,169 +318,28 @@ class SecurityEngine {
     });
   }
 
-  public authenticate(email: string, pass: string, ip: string, userAgent: string): {
-    success: boolean;
-    token?: string;
-    session?: AdminSession;
-    user?: AdminUser;
-    requires2FA?: boolean;
-    error?: string;
-  } {
-    const userEntry = Array.from(this.adminUsers.values()).find(
-      u => u.email.toLowerCase() === email.toLowerCase().trim()
+  /**
+   * REMOVED (Phase 2). It verified a pbkdf2 hash whose salt was a source
+   * constant, and — worse — accepted the two seeded passwords in *plaintext* as
+   * a fallback for the root account, bypassing lockout and 2FA entirely.
+   * Staff sign-in is `staffAuth.login()`; see `POST /api/security/auth/login`.
+   */
+  public authenticate(_email: string, _pass: string, _ip: string, _userAgent: string): never {
+    throw new Error(
+      'securityEngine.authenticate was removed: use staffAuth.login(), which enforces lockout, 2FA and password rotation.'
     );
-
-    if (!userEntry) {
-      this.logAudit({
-        operator: email,
-        role: 'CUSTOMER',
-        action: 'ADMIN_LOGIN_FAILED',
-        category: 'AUTH',
-        severity: 'WARNING',
-        resource: 'AdminAuth',
-        resourceId: email,
-        details: `Failed admin login attempt: User not found from IP ${ip}`,
-        ipAddress: ip
-      });
-      return { success: false, error: 'Invalid staff email or credentials.' };
-    }
-
-    // Check account status
-    if (userEntry.status === 'SUSPENDED' || userEntry.status === 'DISABLED') {
-      return { success: false, error: `This staff account is currently ${userEntry.status.toLowerCase()}. Please contact Super Admin.` };
-    }
-
-    if (userEntry.status === 'LOCKED') {
-      if (userEntry.lockoutUntil && new Date(userEntry.lockoutUntil).getTime() > Date.now()) {
-        const remainingMinutes = Math.ceil((new Date(userEntry.lockoutUntil).getTime() - Date.now()) / (1000 * 60));
-        return { 
-          success: false, 
-          error: `Account is temporarily locked due to excessive failed attempts. Try again in ${remainingMinutes} minutes.` 
-        };
-      } else {
-        // Unlock after lockout period expires
-        userEntry.status = 'ACTIVE';
-        userEntry.failedLoginAttempts = 0;
-        userEntry.lockoutUntil = null;
-      }
-    }
-
-    // Verify Password
-    const candidateHash = this.hashPassword(pass, userEntry.salt);
-    const isSuperAdminFallback = userEntry.email === 'kisholoybd.official@gmail.com' &&
-      (pass === 'KisholoySuperAdmin@2026!' || pass === 'Kisholoy@2026!');
-    if (candidateHash !== userEntry.passwordHash && !isSuperAdminFallback) {
-      userEntry.failedLoginAttempts++;
-      if (userEntry.failedLoginAttempts >= 5) {
-        userEntry.status = 'LOCKED';
-        userEntry.lockoutUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 min lock
-        
-        this.logAudit({
-          operator: userEntry.name,
-          role: userEntry.role,
-          action: 'ACCOUNT_BRUTE_FORCE_LOCKOUT',
-          category: 'AUTH',
-          severity: 'SECURITY_ALERT',
-          resource: 'AdminAccount',
-          resourceId: userEntry.id,
-          details: `Account ${userEntry.email} locked for 15 minutes after 5 consecutive failed login attempts from IP ${ip}.`,
-          ipAddress: ip
-        });
-
-        return { success: false, error: 'Account has been locked for 15 minutes due to 5 failed attempts.' };
-      }
-
-      this.logAudit({
-        operator: userEntry.name,
-        role: userEntry.role,
-        action: 'ADMIN_LOGIN_FAILED',
-        category: 'AUTH',
-        severity: 'WARNING',
-        resource: 'AdminAuth',
-        resourceId: userEntry.id,
-        details: `Incorrect password entered for ${userEntry.email}. Attempt ${userEntry.failedLoginAttempts}/5 from IP ${ip}`,
-        ipAddress: ip
-      });
-
-      return { 
-        success: false, 
-        error: `Incorrect credentials. ${5 - userEntry.failedLoginAttempts} attempts remaining before account lockout.` 
-      };
-    }
-
-    // Successful authentication
-    userEntry.failedLoginAttempts = 0;
-    userEntry.lastLoginAt = new Date().toISOString();
-    userEntry.lastLoginIp = ip;
-    userEntry.updatedAt = new Date().toISOString();
-
-    const sessionToken = `ksh-${crypto.randomBytes(24).toString('hex')}`;
-    const sessionId = `sess-${Date.now()}`;
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 4).toISOString(); // 4 hours TTL
-
-    const session: AdminSession = {
-      sessionId,
-      token: sessionToken,
-      userId: userEntry.id,
-      userName: userEntry.name,
-      userEmail: userEntry.email,
-      role: userEntry.role,
-      ipAddress: ip,
-      userAgent: userAgent.slice(0, 100),
-      createdAt: new Date().toISOString(),
-      expiresAt,
-      lastActiveAt: new Date().toISOString()
-    };
-
-    this.activeSessions.set(sessionToken, session);
-
-    this.logAudit({
-      operator: userEntry.name,
-      role: userEntry.role,
-      action: 'ADMIN_LOGIN_SUCCESS',
-      category: 'AUTH',
-      severity: 'INFO',
-      resource: 'AdminSession',
-      resourceId: sessionId,
-      details: `Successful administrative authentication for ${userEntry.name} (${userEntry.role}). Session established.`,
-      ipAddress: ip
-    });
-
-    const { passwordHash, salt, ...safeUser } = userEntry;
-    return {
-      success: true,
-      token: sessionToken,
-      session,
-      user: safeUser,
-      requires2FA: userEntry.twoFactorEnabled
-    };
   }
 
   public verifySession(token: string, clientIp: string): { valid: boolean; session?: AdminSession; role?: Role } {
     if (!token) return { valid: false };
 
-    // Dev-only root token fallback (absent in production — see initializeAdminUsers).
-    if (token === 'ksh-token-super-admin-root-session-2026') {
-      let rootSession = this.activeSessions.get(token);
-      if (!rootSession) {
-        rootSession = {
-          sessionId: 'sess-root-0001',
-          token,
-          userId: 'adm-001',
-          userName: 'Arifur Rahman (Chief Admin)',
-          userEmail: 'admin@kisholoy.com',
-          role: 'SUPER_ADMIN',
-          ipAddress: clientIp || '127.0.0.1',
-          userAgent: 'KisholoyAdminShell/2.0',
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toISOString(),
-          lastActiveAt: new Date().toISOString()
-        };
-        this.activeSessions.set(token, rootSession);
-      }
-      rootSession.lastActiveAt = new Date().toISOString();
-      return { valid: true, session: rootSession, role: rootSession.role };
-    }
+    /**
+     * There used to be a "dev-only root token fallback" here: a hardcoded bearer
+     * string that produced a SUPER_ADMIN session with a year of validity. The
+     * comment promised it was absent in production; the code did not check the
+     * environment at all. A literal in source is never a credential, so the
+     * branch is gone in every environment.
+     */
 
     const session = this.activeSessions.get(token);
     if (!session) return { valid: false };
@@ -821,6 +536,16 @@ class SecurityEngine {
           'SETTINGS_VIEW', 'SETTINGS_MANAGE',
           'orders:*', 'catalog:*', 'inventory:*', 'suppliers:*', 'customers:*', 'marketing:*', 
           'cms:*', 'settings:read', 'reports:*', 'audit:read'
+        ]
+      },
+      {
+        role: 'STAFF',
+        roleName: 'Staff (read-only)',
+        roleDescription: 'Internal helper account: can look at orders, catalogue and stock for support conversations, and cannot change money, catalogue or settings.',
+        isSystem: true,
+        permissions: [
+          'ORDER_VIEW', 'PRODUCT_VIEW', 'INVENTORY_VIEW', 'CUSTOMER_VIEW', 'SUPPLIER_VIEW',
+          'orders:read', 'catalog:read', 'inventory:read', 'customers:read', 'suppliers:read'
         ]
       },
       {
@@ -1174,31 +899,27 @@ class SecurityEngine {
     return { success: true };
   }
 
-  public verifyMfaForAction(operatorEmailOrId: string, code: string, actionType: string): { success: boolean; error?: string } {
-    // Check if code is valid (simulation accepts 6-digit number, or staff token, or standard 123456 / 998877)
-    const trimmed = (code || '').trim();
-    if (!trimmed || trimmed.length < 6) {
-      return { success: false, error: 'Invalid 6-digit MFA verification code.' };
-    }
-
-    // Simulated TOTP verification check: Accepts valid 6-digit numeric string
-    const isValidNumeric = /^[0-9]{6}$/.test(trimmed);
-    if (!isValidNumeric) {
-      return { success: false, error: 'MFA code must be exactly 6 numeric digits.' };
-    }
-
-    this.logAudit({
-      operator: operatorEmailOrId,
-      role: 'SUPER_ADMIN',
-      action: 'SENSITIVE_ACTION_MFA_VERIFIED',
-      category: 'AUTH',
-      severity: 'INFO',
-      resource: 'SecurityPolicy',
-      resourceId: actionType,
-      details: `MFA step-up authentication verified for sensitive operation: ${actionType}.`
-    });
-
-    return { success: true };
+  /**
+   * Always denies.
+   *
+   * The original accepted *any* six digits ("Simulated TOTP verification"), which
+   * authorised nothing. Supplier payouts now go through `requireStepUp()`
+   * (`server/security/stepUp.ts`), which checks a real RFC 6238 code against the
+   * signed-in account's enrolled secret and refuses large payouts when no
+   * authenticator is enrolled. This shim stays only so a stale caller fails
+   * closed instead of succeeding.
+   */
+  public verifyMfaForAction(
+    _operatorEmailOrId?: string,
+    _code?: string,
+    _actionType?: string
+  ): { success: boolean; code: string; error: string; errorBn: string } {
+    return {
+      success: false,
+      code: 'STEP_UP_ENGINE_DISABLED',
+      error: 'Step-up verification must be performed against the signed-in account. This action was not authorized.',
+      errorBn: 'বাড়তি যাচাই লগইন করা অ্যাকাউন্ট দিয়ে করতে হয়। এই কাজটি অনুমোদিত হয়নি।',
+    };
   }
 
   public toggleMfa(userId: string, enabled: boolean, method: 'APP_TOTP' | 'SMS_OTP' = 'APP_TOTP', operator: string = 'SUPER_ADMIN'): boolean {

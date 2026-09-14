@@ -20,6 +20,8 @@ import { securityEngine } from './securityEngine';
 import { normalizeBdMobilePhone } from '../src/lib/phone';
 import { defaultPrintSettings } from '../src/lib/printFormats';
 import { mongoService } from './mongoService';
+import { persistence } from './persistence/store';
+import { log } from './http/errors';
 import { upstashRedisService } from './upstashService';
 import { 
   INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_ORDERS, 
@@ -76,6 +78,196 @@ class ServerDatabase {
   // Unified Print & Document Engine settings (output-only, non-mutating)
   printSettings: PrintSettings = JSON.parse(JSON.stringify(defaultPrintSettings()));
 
+  // ---------------------------------------------------------------------
+  // Durable state (see server/persistence/store.ts)
+  //
+  // The in-memory arrays stay the synchronous read model that ~289 routes
+  // already depend on. Everything that mutates a persisted collection calls
+  // `sync()` so the write-behind store sees the change, and `hydrate()` runs
+  // once at boot to make the durable store authoritative.
+  // ---------------------------------------------------------------------
+
+  private static readonly PERSISTED: Array<[string, keyof ServerDatabase, string]> = [
+    ['products', 'products', 'id'],
+    ['categories', 'categories', 'id'],
+    ['coupons', 'coupons', 'id'],
+    ['flashDeals', 'flashDeals', 'id'],
+    ['warehouses', 'warehouses', 'id'],
+    ['warehouseStock', 'warehouseStock', 'id'],
+    ['customerAddresses', 'customerAddresses', 'id'],
+    ['wishlists', 'wishlists', 'id'],
+    ['loyaltyWallets', 'loyaltyWallets', 'id'],
+    ['orders', 'orders', 'id'],
+    ['customers', 'customers', 'id'],
+    ['inventoryTransactions', 'inventoryTransactions', 'id'],
+    ['paymentTransactions', 'paymentTransactions', 'id'],
+    ['customerReturns', 'customerReturns', 'id'],
+    ['customerNotifications', 'customerNotifications', 'id'],
+    ['auditLogs', 'auditLogs', 'id'],
+    ['contentRevisions', 'contentRevisions', 'id'],
+    ['notificationLogs', 'notificationLogs', 'id'],
+    ['rmaRecords', 'rmaRecords', 'id'],
+  ];
+
+  /** Queue every persisted collection for a durable sync (cheap, deferred). */
+  syncAll(): void {
+    for (const [name, field, idField] of ServerDatabase.PERSISTED) {
+      const list = this[field as unknown as keyof this] as unknown as unknown[];
+      if (Array.isArray(list)) persistence.sync(name, list as Array<Record<string, unknown>> as never, idField);
+    }
+    persistence.sync('siteContent', [{ id: 'site', ...this.siteContent }] as never, 'id');
+  }
+
+  syncCollection(name: string): void {
+    const entry = ServerDatabase.PERSISTED.find(([n]) => n === name);
+    if (!entry) return;
+    const list = this[entry[1] as unknown as keyof this] as unknown as unknown[];
+    if (Array.isArray(list)) persistence.sync(name, list as never, entry[2]);
+  }
+
+  /**
+   * Load durable state into the read model. Returns the number of documents
+   * applied. When the store is empty the mock-data seed already present in the
+   * constructor stays as the starting point (development), or is replaced by
+   * the demo catalogue when `KISHOLOY_AUTO_SEED` is on.
+   */
+  async hydrateFromStore(): Promise<{ loaded: number; collections: string[] }> {
+    await persistence.ensureReady();
+    if (persistence.mode === 'memory' && !persistence.durable) {
+      log.warn('db', 'store is VOLATILE — no MONGODB_URI configured; orders and admin edits die with the process');
+      return { loaded: 0, collections: [] };
+    }
+
+    let loaded = 0;
+    const touched: string[] = [];
+    for (const [name, field, idField] of ServerDatabase.PERSISTED) {
+      try {
+        const docs = await persistence.loadCollection<Record<string, unknown>>(name, idField);
+        if (!docs.length) continue;
+        (this as unknown as Record<string, unknown>)[field as string] = docs;
+        loaded += docs.length;
+        touched.push(name);
+      } catch (err) {
+        log.error('db', `hydrate_failed:${name}`, err);
+      }
+    }
+
+    try {
+      const content = await persistence.loadCollection<{ id: string } & SiteContent>('siteContent', 'id');
+      if (content.length) {
+        const { id: _drop, ...rest } = content[content.length - 1];
+        void _drop;
+        this.siteContent = rest as SiteContent;
+        loaded += 1;
+        touched.push('siteContent');
+      }
+    } catch (err) {
+      log.error('db', 'hydrate_failed:siteContent', err);
+    }
+
+    // siteContent is a single document; re-point it at the loaded copy.
+    if (touched.includes('siteContent')) persistence.sync('siteContent', [{ id: 'site', ...this.siteContent }] as never, 'id');
+
+    log.info('db', `hydrated ${loaded} documents (${touched.join(', ') || 'none'})`);
+    return { loaded, collections: touched };
+  }
+
+  /**
+   * Atomic sale allocation.
+   *
+   * In a durable store the decrement is a conditional update (`stock >= qty`),
+   * which is what actually prevents two concurrent checkouts from taking the
+   * same last unit. In the volatile store we keep the single-threaded path but
+   * re-check availability inside it.
+   */
+  async allocateStockAtomically(
+    lines: Array<{ productId: string; quantity: number }>,
+    context: { orderNumber: string; operator?: string }
+  ): Promise<{ success: boolean; applied: Array<{ productId: string; quantity: number }>; error?: string; failedProduct?: string }> {
+    const applied: Array<{ productId: string; quantity: number }> = [];
+
+    for (const line of lines) {
+      const product = this.getProductById(line.productId) || this.getProductBySku(line.productId);
+      if (!product) {
+        await this.rollbackAllocations(applied, context);
+        return { success: false, applied: [], error: `Product "${line.productId}" is no longer in the catalogue.`, failedProduct: line.productId };
+      }
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+        await this.rollbackAllocations(applied, context);
+        return { success: false, applied: [], error: `Invalid quantity for "${product.title}".`, failedProduct: product.id };
+      }
+
+      if (product.trackInventory === false) {
+        applied.push({ productId: product.id, quantity: line.quantity });
+        continue;
+      }
+
+      if (persistence.durable) {
+        const result = await persistence.atomicStockAdjust(product.id, -line.quantity, true);
+        if (!result || !result.ok) {
+          await this.rollbackAllocations(applied, context);
+          const reason = result?.error === 'INSUFFICIENT_STOCK'
+            ? `"${product.title}" just sold out — only ${result.before ?? 0} unit(s) were left.`
+            : `"${product.title}" could not be reserved right now. Please try again.`;
+          return { success: false, applied: [], error: reason, failedProduct: product.id };
+        }
+        // Mirror the durable value into the read model so the next request in
+        // this isolate sees the truth rather than a stale number.
+        product.stock = Number(result.after ?? product.stock);
+        applied.push({ productId: product.id, quantity: line.quantity });
+        this.recordInventoryMovement(product, -line.quantity, context);
+        continue;
+      }
+
+      // Volatile store: still guarded, still single-writer.
+      if ((product.stock ?? 0) < line.quantity) {
+        await this.rollbackAllocations(applied, context);
+        return {
+          success: false,
+          applied: [],
+          error: `Only ${product.stock ?? 0} unit(s) of "${product.title}" are left.`,
+          failedProduct: product.id,
+        };
+      }
+      product.stock = Math.max(0, (product.stock ?? 0) - line.quantity);
+      applied.push({ productId: product.id, quantity: line.quantity });
+      this.recordInventoryMovement(product, -line.quantity, context);
+    }
+
+    this.syncCollection('products');
+    this.syncCollection('inventoryTransactions');
+    return { success: true, applied };
+  }
+
+  private recordInventoryMovement(
+    product: Product,
+    quantityChange: number,
+    context: { orderNumber: string; operator?: string }
+  ): void {
+    try {
+      this.adjustInventory({
+        productId: product.id,
+        quantityChange: 0,
+        reason: `Sale allocation for order ${context.orderNumber}`,
+        operator: context.operator || 'ORDER_ENGINE',
+        notes: `Ledger entry for ${Math.abs(quantityChange)} unit(s); stock already committed atomically.`,
+      });
+    } catch (err) {
+      log.warn('db', 'inventory_ledger_note_failed', (err as Error).message);
+    }
+  }
+
+  async rollbackAllocations(applied: Array<{ productId: string; quantity: number }>, context: { orderNumber: string; operator?: string }): Promise<void> {
+    for (const line of applied) {
+      if (persistence.durable) {
+        await persistence.atomicStockAdjust(line.productId, line.quantity, false);
+      }
+      const product = this.getProductById(line.productId);
+      if (product) product.stock = (product.stock ?? 0) + line.quantity;
+    }
+    if (applied.length) this.syncCollection('products');
+  }
+
   // Product methods
   getProductById(id: string): Product | undefined {
     return this.products.find(p => p.id === id);
@@ -85,12 +277,21 @@ class ServerDatabase {
     return this.products.find(p => p.sku === sku);
   }
 
-  addProduct(newProdData: Omit<Product, 'id'>, operator = 'ADMIN'): Product {
+  addProduct(newProdData: Omit<Product, 'id'> & { id?: string }, operator = 'ADMIN'): Product {
+    const now = new Date().toISOString();
     const newProd: Product = {
+      status: 'ACTIVE',
+      sellingModel: 'IN_HOUSE',
+      productType: 'PHYSICAL',
+      trackInventory: true,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: now,
       ...newProdData,
-      id: `prod-${Date.now()}`
+      id: newProdData.id || `prod-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     };
     this.products.unshift(newProd);
+    this.syncCollection('products');
     this.addAuditLog('CREATE_PRODUCT', 'Product', newProd.sku, `Created product "${newProd.title}"`, operator);
     return newProd;
   }
@@ -98,17 +299,50 @@ class ServerDatabase {
   updateProduct(id: string, updates: Partial<Product>, operator = 'ADMIN'): Product | null {
     const prod = this.getProductById(id);
     if (!prod) return null;
-    Object.assign(prod, updates);
+    // Identity and provenance fields are not client-writable through this path.
+    const { id: _ignoreId, createdAt: _ignoreCreated, isDeleted: _ignoreDeleted, ...safe } = updates as Record<string, unknown>;
+    void _ignoreId; void _ignoreCreated; void _ignoreDeleted;
+    Object.assign(prod, safe, { updatedAt: new Date().toISOString() });
+    this.recomputeStockStatus(prod);
+    this.syncCollection('products');
     this.addAuditLog('UPDATE_PRODUCT', 'Product', prod.sku || id, `Updated product "${prod.title}" details`, operator);
     return prod;
   }
 
+  /** Keeps the derived `stockStatus` honest wherever stock is written. */
+  recomputeStockStatus(product: Product): void {
+    const available = product.trackInventory === false
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(0, (product.stock || 0) - (product.reservedStock || 0));
+    if (product.trackInventory === false) {
+      product.stockStatus = 'IN_STOCK';
+      return;
+    }
+    if (available <= 0) product.stockStatus = 'OUT_OF_STOCK';
+    else if ((product.lowStockThreshold ?? 10) >= available) product.stockStatus = 'LOW_STOCK';
+    else product.stockStatus = 'IN_STOCK';
+  }
+
+  /**
+   * Soft delete. Hard-removing a product would orphan the `items[]` rows of
+   * every historical order that contains it, breaking invoices, returns,
+   * refunds and supplier reconciliation. Archived products stay queryable by
+   * id for those documents and disappear from the storefront and admin lists.
+   */
   deleteProduct(id: string, operator = 'ADMIN'): boolean {
     const idx = this.products.findIndex(p => p.id === id);
     if (idx === -1) return false;
-    const removed = this.products.splice(idx, 1)[0];
-    this.addAuditLog('DELETE_PRODUCT', 'Product', removed.sku || id, `Deleted product "${removed.title}" from catalog`, operator);
+    const removed = this.products[idx];
+    const stamp = new Date().toISOString();
+    this.products.splice(idx, 1, { ...removed, isDeleted: true, status: 'ARCHIVED', deletedAt: stamp, updatedAt: stamp });
+    this.syncCollection('products');
+    this.addAuditLog('DELETE_PRODUCT', 'Product', removed.sku || id, `Archived product "${removed.title}" (soft delete, history preserved)`, operator);
     return true;
+  }
+
+  /** Live products only — the storefront and admin lists must use this. */
+  get activeProducts(): Product[] {
+    return this.products.filter(p => !p.isDeleted && p.status !== 'ARCHIVED');
   }
 
   // Category methods
@@ -122,6 +356,7 @@ class ServerDatabase {
       id: `cat-${Date.now()}`
     };
     this.categories.push(newCat);
+    this.syncCollection('categories');
     this.addAuditLog('CREATE_CATEGORY', 'Category', newCat.slug, `Added category "${newCat.name}"`, operator);
     return newCat;
   }
@@ -129,7 +364,8 @@ class ServerDatabase {
   updateCategory(id: string, updates: Partial<Category>, operator = 'ADMIN'): Category | null {
     const cat = this.getCategoryById(id);
     if (!cat) return null;
-    Object.assign(cat, updates);
+    Object.assign(cat, updates, { updatedAt: new Date().toISOString() });
+    this.syncCollection('categories');
     this.addAuditLog('UPDATE_CATEGORY', 'Category', cat.slug || id, `Updated category "${cat.name}"`, operator);
     return cat;
   }
@@ -138,6 +374,7 @@ class ServerDatabase {
     const idx = this.categories.findIndex(c => c.id === id);
     if (idx === -1) return false;
     const removed = this.categories.splice(idx, 1)[0];
+    this.syncCollection('categories');
     this.addAuditLog('DELETE_CATEGORY', 'Category', removed.slug || id, `Deleted category "${removed.name}"`, operator);
     return true;
   }
@@ -172,6 +409,25 @@ class ServerDatabase {
     return result.success;
   }
 
+  /**
+   * Records a fully-formed security/audit entry (used by the staff auth layer,
+   * which knows operator, role, ip and severity that the legacy 5-argument
+   * `addAuditLog` cannot carry).
+   */
+  addSecurityAuditLog(entry: {
+    operator: string;
+    role: string;
+    action: string;
+    category: string;
+    severity: string;
+    resource: string;
+    resourceId: string;
+    details: string;
+    ipAddress: string;
+  }): void {
+    this.addAuditLog(entry.action, entry.resource, entry.resourceId, entry.details, entry.operator);
+  }
+
   // Inventory & Stock Ledger Methods
   adjustInventory(params: {
     productId: string;
@@ -191,6 +447,8 @@ class ServerDatabase {
     const quantityBefore = product.stock;
     const quantityAfter = Math.max(0, quantityBefore + params.quantityChange);
     product.stock = quantityAfter;
+    this.recomputeStockStatus(product);
+    this.syncCollection('products');
 
     // Detect high-volume adjustment (Threshold: >= 50 units)
     const isHighVolume = Math.abs(params.quantityChange) >= 50;
@@ -395,8 +653,30 @@ class ServerDatabase {
     return this.orders.find(o => o.orderNumber === orderNumber);
   }
 
+  /**
+   * Allocates a unique, human-friendly order number.
+   *
+   * The old inline generator (`KSH-<year>-<1000..8999>` with `Math.random`)
+   * collided once the store passed a few thousand orders in a year — and a
+   * collision silently overwrote revenue rows because `orderNumber` is the join
+   * key for courier, refund and settlement lookups.
+   */
+  nextOrderNumber(): string {
+    const year = new Date().getFullYear();
+    const prefix = `KSH-${year}-`;
+    const taken = new Set(this.orders.map((o) => String(o.orderNumber || '')));
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const candidate = `${prefix}${1000 + Math.floor(Math.random() * 900000)}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return `${prefix}${Date.now().toString().slice(-7)}`;
+  }
+
   addOrder(order: Order): void {
     this.orders.unshift(order);
+    this.syncCollection('orders');
+    // Single-document write so a crash after this response cannot lose order #123.
+    void persistence.upsertOne('orders', order as unknown as object, 'id');
     mongoService.syncOrder(order).catch(() => {});
     upstashRedisService.set(`order:${order.orderNumber}`, order, 86400).catch(() => {});
   }
@@ -418,6 +698,8 @@ class ServerDatabase {
     });
 
     this.addAuditLog('UPDATE_ORDER_STATUS', 'Order', order.orderNumber, `Order status set to ${status}`);
+    this.syncCollection('orders');
+    void persistence.upsertOne('orders', order as unknown as object, 'id');
     mongoService.syncOrder(order).catch(() => {});
     upstashRedisService.set(`order:${order.orderNumber}`, order, 86400).catch(() => {});
     return order;
@@ -426,6 +708,7 @@ class ServerDatabase {
   // Payment Transactions methods
   addPaymentTransaction(tx: PaymentTransaction): void {
     this.paymentTransactions.unshift(tx);
+    this.syncCollection('paymentTransactions');
   }
 
   getPaymentTransactions(): PaymentTransaction[] {

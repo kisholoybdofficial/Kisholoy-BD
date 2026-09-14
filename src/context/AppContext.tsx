@@ -11,7 +11,8 @@ import {
   CustomerNotification, CustomCourierConfig
 } from '../types';
 import { logAuthEvent } from '../utils/telemetryLogger';
-import { apiFetch, apiFetchJson, setCustomerToken, getStaffToken } from '../lib/apiClient';
+import { apiFetch, apiFetchJson, setCustomerToken, getStaffToken, AUTH_EXPIRED_EVENT } from '../lib/apiClient';
+import { setSiteWideNoIndex } from '../lib/seo';
 import { 
   INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_ORDERS, 
   INITIAL_CUSTOMERS, INITIAL_CONTENT, INITIAL_AUDIT_LOGS, 
@@ -153,6 +154,11 @@ interface AppContextType {
 
   // Customer Account Portal & Wishlists (Phase 15)
   currentCustomerId: string;
+  /** 'unknown' until the cookie session resolves; never assume a shopper. */
+  customerAuthState: 'unknown' | 'anonymous' | 'authenticated';
+  /** Catalogue load state so pages can render skeletons/errors instead of mock rows. */
+  catalogStatus: 'loading' | 'ready' | 'error';
+  catalogError: string | null;
   setCurrentCustomerId: (id: string) => void;
   loginCustomer: (customerId: string, profile?: CustomerProfile, sessionToken?: string | null) => void;
   logoutCustomer: () => void;
@@ -185,7 +191,10 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('EN');
-  const [currentRole, setCurrentRole] = useState<Role>('SUPER_ADMIN');
+  // The client must never *assume* a privileged role. `currentRole` is filled in
+  // from the server session (see AdminLayout / fetchStaffSession); an anonymous
+  // visitor is a CUSTOMER and the API refuses every privileged call regardless.
+  const [currentRole, setCurrentRole] = useState<Role>('CUSTOMER');
   // ---------------- Theme (Light / Dark) Default: Day Theme ----------------
   const [theme, setThemeState] = useState<ThemePreference>(() => {
     if (typeof window !== 'undefined') {
@@ -223,10 +232,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setTheme = (t: ThemePreference) => setThemeState(t);
   const toggleDarkMode = () => setThemeState(isDarkMode ? 'light' : 'dark');
   
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
-  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
+  // ── Catalogue state ──────────────────────────────────────────────────────
+  // These used to be initialised from `src/data/mockData`, so the storefront
+  // rendered a fake catalogue even when the API was down or returned nothing —
+  // "20 products" in the UI with an empty database behind them. They now start
+  // empty, and `catalogStatus` lets pages render real loading/empty/error
+  // states instead of pretending.
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>(INITIAL_EXPENSES);
   const [settlements, setSettlements] = useState<SettlementRecord[]>(INITIAL_SETTLEMENTS);
   const [automationJobs, setAutomationJobs] = useState<AutomationJob[]>(INITIAL_AUTOMATION_JOBS);
@@ -244,6 +261,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_CONTENT;
   });
   const [contentRevisions, setContentRevisions] = useState<ContentRevision[]>(INITIAL_CONTENT_REVISIONS);
+
+  /**
+   * Mirror the CMS "hide from search engines" switch into the SEO layer so it
+   * applies to every route at once — including pages already mounted — instead of
+   * relying on each component remembering to pass `private: true`.
+   */
+  useEffect(() => {
+    setSiteWideNoIndex(Boolean(siteContent?.seo?.noindex));
+  }, [siteContent?.seo?.noindex]);
   
   // Phase 13: Multi-Warehouse, STO, Pick Lists & Manifests
   const [warehouses, setWarehouses] = useState<WarehouseHub[]>(INITIAL_WAREHOUSES);
@@ -254,17 +280,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [dispatchManifests, setDispatchManifests] = useState<DispatchManifest[]>(INITIAL_DISPATCH_MANIFESTS);
 
   // Phase 15: Customer Account Portal, Wishlists & Self-Service
-  const [currentCustomerId, setCurrentCustomerId] = useState<string>('cust-1');
-  const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(INITIAL_CUSTOMER_PROFILES[0] || null);
-  const [savedAddresses, setSavedAddresses] = useState<CustomerAddress[]>(INITIAL_CUSTOMER_ADDRESSES.filter(a => a.customerId === 'cust-1'));
-  const [wishlist, setWishlist] = useState<WishlistItem[]>(INITIAL_WISHLISTS.filter(w => w.customerId === 'cust-1'));
-  const [returnRequests, setReturnRequests] = useState<CustomerReturnRequest[]>(INITIAL_CUSTOMER_RETURNS.filter(r => r.customerId === 'cust-1'));
-  const [customerLoyalty, setCustomerLoyalty] = useState<CustomerLoyaltyWallet | null>(INITIAL_LOYALTY_WALLETS.find(w => w.customerId === 'cust-1') || null);
+  // ── Customer identity ─────────────────────────────────────────────────────
+  // `currentCustomerId` used to default to `'cust-1'` with that shopper's
+  // profile, addresses and wishlist pre-loaded, so opening /account as a
+  // complete stranger showed someone else's order history. Identity now starts
+  // empty and is only filled after the server confirms a session.
+  const [currentCustomerId, setCurrentCustomerId] = useState<string>('');
+  const [customerAuthState, setCustomerAuthState] = useState<'unknown' | 'anonymous' | 'authenticated'>('unknown');
+  const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
+  const [savedAddresses, setSavedAddresses] = useState<CustomerAddress[]>([]);
+  const [wishlist, setWishlist] = useState<WishlistItem[]>([]);
+  const [returnRequests, setReturnRequests] = useState<CustomerReturnRequest[]>([]);
+  const [customerLoyalty, setCustomerLoyalty] = useState<CustomerLoyaltyWallet | null>(null);
   
   // Phase 16: Customer In-App Notifications & Multi-Channel Communications
-  const [customerNotifications, setCustomerNotifications] = useState<CustomerNotification[]>(
-    INITIAL_CUSTOMER_NOTIFICATIONS.filter(n => n.customerId === 'cust-1')
-  );
+  const [customerNotifications, setCustomerNotifications] = useState<CustomerNotification[]>([]);
   
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -295,11 +325,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 
     // Sync authoritative products catalog from server API
-    safeFetchJson('/api/products').then(data => {
-      if (data?.success && Array.isArray(data.products) && data.products.length > 0) {
-        setProducts(data.products);
-      }
-    });
+    safeFetchJson('/api/products?limit=200')
+      .then((data) => {
+        if (data?.success && Array.isArray(data.products)) {
+          setProducts(data.products);
+          setCatalogStatus('ready');
+          setCatalogError(null);
+          return;
+        }
+        setCatalogStatus('error');
+        setCatalogError('The catalogue could not be loaded from the server.');
+      })
+      .catch(() => {
+        setCatalogStatus('error');
+        setCatalogError('The catalogue could not be loaded from the server.');
+      });
 
     // Sync categories from server API
     safeFetchJson('/api/categories').then(data => {
@@ -396,11 +436,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Firebase Auth State Listener
     const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
       if (fbUser) {
-        console.log('Firebase user logged in:', fbUser.email, fbUser.uid);
-        // If logged in as admin email, escalate role to SUPER_ADMIN
-        if (fbUser.email === 'kisholoybd.official@gmail.com') {
-          setCurrentRole('SUPER_ADMIN');
-        }
+        // No role escalation here. An email claim is something the browser (and
+        // the identity provider) supplies, not an authorization decision: this
+        // used to hand the admin shell to whoever signed in with the maintainer's
+        // address. Staff capability is decided by the server on
+        // `POST /api/security/auth/login` and read from `/api/security/auth/me`;
+        // `enforceApiSurface` re-checks it on every privileged call, so a forged
+        // client-side role can only ever unlock a redirect, never data or writes.
+        console.log('Firebase user logged in:', fbUser.uid);
         setCustomerProfile(prev => prev ? {
           ...prev,
           name: fbUser.displayName || prev.name,
@@ -1315,16 +1358,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateSiteContent = (updates: Partial<SiteContent>, summary?: string) => {
     const updated = { ...siteContent, ...updates };
     setSiteContent(updated);
-    
-    const staffToken = localStorage.getItem('kisholoy_staff_token') || 'kisholoy_root_superadmin_session_token_2026';
 
-    // Asynchronously sync with server API
-    fetch('/api/content', {
+    /**
+     * Asynchronously sync with the server. Identity comes from the httpOnly
+     * session cookie and `apiFetch` adds the CSRF partner — the previous version
+     * hand-built `Authorization: Bearer <localStorage token or a hardcoded root
+     * super-admin string>`, which both leaked a static credential into the
+     * client bundle and was rejected by the server.
+     */
+    apiFetch('/api/content', {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${staffToken}`
-      },
+      auth: 'staff',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         content: updated,
         operator: currentRole,
@@ -1346,13 +1391,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const publishSiteContent = async (newContent: SiteContent, summary?: string): Promise<boolean> => {
     try {
       setSiteContent(newContent);
-      const staffToken = localStorage.getItem('kisholoy_staff_token') || 'kisholoy_root_superadmin_session_token_2026';
 
-      const res = await fetch('/api/content/publish', {
+      // Session cookie + CSRF only; no bearer token is ever assembled in the UI.
+      const res = await apiFetch('/api/content/publish', {
         method: 'POST',
+        auth: 'staff',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${staffToken}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           content: newContent,
@@ -1921,14 +1966,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loginCustomer = (customerId: string, profile?: CustomerProfile, sessionToken?: string | null) => {
     setCurrentCustomerId(customerId);
-    // Persist the customer session bearer so scoped endpoints (e.g. GET /api/orders)
-    // receive an identity even when no staff token exists in this tab.
+    setCustomerAuthState('authenticated');
+    // The session itself now lives in an httpOnly cookie set by the server; an
+    // in-memory bearer is kept only so scoped reads work in the same tab.
     if (sessionToken !== undefined) setCustomerToken(sessionToken || null);
-    try {
-      localStorage.setItem('kisholoy_customer_id', customerId);
-    } catch {}
     if (profile) setCustomerProfile(profile);
-    loadCustomerData(customerId);
+    void loadCustomerData(customerId);
     
     // Telemetry Auth Event Logging
     const matchedCustomer = customers.find(c => c.id === customerId);
@@ -1971,11 +2014,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomerNotifications([]);
     setCustomerLoyalty(null);
     setCustomerToken(null);
-    try {
-      localStorage.removeItem('kisholoy_customer_id');
-    } catch {}
+    setCustomerAuthState('anonymous');
     showToast('Logged out of customer account.');
   };
+
+  /**
+   * Restore the shopper session from the cookie on boot. There is deliberately
+   * no "remember the last customer id in localStorage" path any more: that is
+   * how one visitor could open the account page and see another person's
+   * addresses, wishlist and order history.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    apiFetchJson<{ valid: boolean; customer?: { id: string; name?: string } & Partial<CustomerProfile> }>('/api/customer/auth/me', { auth: 'customer' })
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.valid && data.customer?.id) {
+          setCurrentCustomerId(data.customer.id);
+          setCustomerAuthState('authenticated');
+          void loadCustomerData(data.customer.id);
+          return;
+        }
+        setCustomerAuthState('anonymous');
+      })
+      .catch(() => {
+        if (!cancelled) setCustomerAuthState('anonymous');
+      });
+
+    const onExpired = () => {
+      if (cancelled) return;
+      setCurrentCustomerId('');
+      setCustomerProfile(null);
+      setSavedAddresses([]);
+      setWishlist([]);
+      setReturnRequests([]);
+      setCustomerNotifications([]);
+      setCustomerLoyalty(null);
+      setCustomerAuthState('anonymous');
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const unreadNotificationsCount = customerNotifications.filter(n => !n.isRead).length;
 
@@ -2342,6 +2425,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isFulfillmentOptional,
         setIsFulfillmentOptional,
         currentCustomerId,
+        customerAuthState,
+        catalogStatus,
+        catalogError,
         setCurrentCustomerId,
         loginCustomer,
         logoutCustomer,

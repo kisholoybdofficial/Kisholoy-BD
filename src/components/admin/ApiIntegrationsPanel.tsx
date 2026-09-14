@@ -59,7 +59,10 @@ export function ApiIntegrationsPanel() {
       const res = await fetch('/api/integrations/test-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'kisholoybd.official@gmail.com' }),
+        // No recipient baked into the bundle: the server mails the configured
+        // SYSTEM_ADMIN_EMAIL and answers 422 (bilingual) when that is unset, which
+        // the failure branch below already surfaces in a toast.
+        body: JSON.stringify({}),
       });
       const json = await res.json();
       if (json.success) {
@@ -202,7 +205,9 @@ export function ApiIntegrationsPanel() {
         <span className="text-stone-400 text-xs">|</span>
         <span className="text-stone-600 dark:text-stone-400 text-[11px]">
           {isBn ? 'অফিসিয়াল সিস্টেম মেইল:' : 'Official Admin Email:'}{' '}
-          <strong className="text-stone-900 dark:text-white font-mono">kisholoybd.official@gmail.com</strong>
+          <strong className="text-stone-500 dark:text-stone-400 font-mono">
+            {isBn ? 'ডিপ্লয়মেন্ট এনভায়রনমেন্টে সংরক্ষিত (SYSTEM_ADMIN_EMAIL)' : 'set in the deployment environment (SYSTEM_ADMIN_EMAIL)'}
+          </strong>
         </span>
       </div>
 
