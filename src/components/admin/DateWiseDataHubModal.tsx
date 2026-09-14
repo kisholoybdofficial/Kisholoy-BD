@@ -939,7 +939,7 @@ export function DateWiseDataHubModal({
                     <span>{importing ? (isBn ? 'পার্সিং হচ্ছে...' : 'Parsing File...') : (isBn ? 'ফাইল সিলেক্ট করুন (.xlsx, .csv)' : 'Select Data File (.xlsx, .csv)')}</span>
                     <input
                       type="file"
-                      accept=".xlsx,.xls,.csv"
+                      accept=".xlsx,.csv" // .xls (BIFF8) is refused with an explanation, so it is not offered
                       onChange={handleFileUpload}
                       className="hidden"
                       disabled={importing}
