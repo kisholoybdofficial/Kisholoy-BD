@@ -560,7 +560,12 @@ class StaffAuthService {
   }): Promise<{ success: true; account: StaffAccount; temporaryPassword: string | null } | { success: false; error: string }> {
     await this.hydrate();
     const email = emailKey(input.email);
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { success: false, error: 'A valid email address is required.' };
+    // RFC 5321 caps an address at 254 characters; bounding the input before the
+    // pattern also removes the quadratic backtracking CodeQL flagged on the two
+    // adjacent [^\s@]+ runs (`!@!@!@...`). Longer than 254 is invalid anyway.
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { success: false, error: 'A valid email address is required (254 characters or fewer).' };
+    }
     if (this.findByEmail(email)) return { success: false, error: 'A staff account with this email already exists.' };
     if (!STAFF_ROLES.includes(input.role)) return { success: false, error: 'Unknown role requested.' };
     if (input.role === 'SUPER_ADMIN' && input.actorRole !== 'SUPER_ADMIN') {

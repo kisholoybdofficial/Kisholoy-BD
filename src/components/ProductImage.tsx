@@ -39,6 +39,27 @@ export interface ProductImageProps {
   onLoad?: () => void;
 }
 
+/**
+ * Only displayable schemes. An image URL is admin-supplied content that is
+ * stored, echoed into `srcSet`, and in some templates wrapped in an `<a href>`
+ * for the lightbox, so `javascript:` or `data:text/html` must never survive the
+ * data layer. Anything unexpected falls back to the placeholder - which is also
+ * what a typo'd path deserves.
+ */
+function displayableSrc(raw: string | undefined): string | null {
+  const value = (raw || '').trim();
+  if (!value) return null;
+  if (value.startsWith('/') || value.startsWith('./')) return value;
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+    if (url.protocol === 'data:' && /^data:image\/(png|jpe?g|webp|gif|avif);/i.test(value)) return value;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function ProductImage({
   src,
   alt,
@@ -54,7 +75,8 @@ export function ProductImage({
 }: ProductImageProps) {
   const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
-  const effectiveSrc = !src || failedSrc === src ? PLACEHOLDER_IMAGE : src;
+  const safeSrc = displayableSrc(src);
+  const effectiveSrc = !safeSrc || failedSrc === src ? PLACEHOLDER_IMAGE : safeSrc;
 
   React.useEffect(() => {
     // Reset failure state when the product image changes (admin edits, variant

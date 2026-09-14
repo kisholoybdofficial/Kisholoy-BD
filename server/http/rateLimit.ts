@@ -110,10 +110,23 @@ export const tierForRequest = (path: string, method: string): LimitTier => {
   return 'STOREFRONT';
 };
 
-const clientIp = (req: Request): string =>
-  ((req.headers['x-forwarded-for'] as string) || '').split(',')[0].trim() ||
-  req.socket?.remoteAddress?.replace(/^::ffff:/, '') ||
-  'unknown';
+/**
+ * The limiter bucket IS the brute-force defence, so its key must not be
+ * client-controlled. `x-forwarded-for` is a comma list an anonymous caller
+ * can forge per attempt (`X-Forwarded-For: 1.2.3.4`, next request
+ * `5.6.7.8`), which buys unlimited login/reset tries while the tier looks
+ * busy.
+ *
+ * Express resolves `req.ip` through `app.set('trust proxy', 1)`: behind the
+ * platform proxy it is the real client, and a spoofed extra entry is ignored
+ * because only the hop our proxy appended is trusted.
+ */
+const clientIp = (req: Request): string => {
+  const resolved = (req as unknown as { ip?: string }).ip;
+  if (typeof resolved === 'string' && resolved.trim()) return resolved.trim();
+  const socket = (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  return socket || 'unknown';
+};
 
 /**
  * A second, tighter limit keyed on the submitted identifier, so an attacker

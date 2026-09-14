@@ -123,15 +123,38 @@ export function sendInternalError(
   // In development the real message is genuinely useful and there is no
   // external audience; in production it never leaves the process.
   const expose = !config.isProduction;
+  // Even in development the *shape* of a stack (file paths, module layout)
+  // stays in the log; only the human-readable reason is shown.
+  const devMessage = expose ? redactInternals(message) || message : null;
   return respondError(
     res,
     opts.status ?? 500,
     'INTERNAL_ERROR',
-    opts.fallback ?? (expose ? message : 'Something went wrong on our side. Please try again.'),
-    opts.fallbackBn ?? (expose ? message : 'আমাদের সার্ভারে কিছু একটা সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'),
+    opts.fallback ?? (devMessage ?? 'Something went wrong on our side. Please try again.'),
+    opts.fallbackBn ?? (devMessage ?? 'আমাদের সার্ভারে কিছু একটা সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'),
     expose ? { ref: correlationId } : { ref: correlationId }
   );
 }
+
+/**
+ * Keys that must never reach a browser, whatever an `AppError` subclass put in
+ * `details`. A stack frame is a directory listing of the deployment; `sql`,
+ * `command` and `config` are worse.
+ */
+const NON_CLIENT_KEYS =
+  /^(stack|frames?|trace|inner|cause|sql|query|command|config|env|secrets?|password|authorization|token)$/i;
+
+const isStackShaped = (value: string): boolean =>
+  /\n\s+at\s+\S+.*\(.+:\d+:\d+\)/.test(value) ||
+  value.includes('node_modules') ||
+  /\b[\w.\-]+\.(ts|tsx|js|mjs):\d+/.test(value);
+
+/** Strips absolute paths and `at ... (file:line:col)` frames from a message. */
+const redactInternals = (value: string): string =>
+  value
+    .replace(/\n?\s*at\s+[^\n]*\([^)]*\)/g, '')
+    .replace(/(?:\/home|\/usr|\/opt|[A-Za-z]:\\)[^\s"']+/g, '[path redacted]')
+    .trim();
 
 function respondError(
   res: ServerResponse,
@@ -141,6 +164,15 @@ function respondError(
   messageBn: string,
   details?: Record<string, unknown>
 ): ServerResponse {
+  if (details) {
+    const safe: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(details)) {
+      if (NON_CLIENT_KEYS.test(key)) continue;
+      if (typeof value === 'string' && isStackShaped(value)) continue;
+      safe[key] = value;
+    }
+    details = safe;
+  }
   const anyRes = res as unknown as ServerResponse & { finished?: boolean; writableEnded?: boolean; headersSent?: boolean };
   if (anyRes.headersSent || anyRes.writableEnded || anyRes.finished) return res;
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });

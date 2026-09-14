@@ -257,7 +257,17 @@ function innerTexts(xml: string, tag: string): string[] {
     const from = match.index + match[0].length;
     const close = xml.indexOf(`</${tag}>`, from);
     if (close === -1) continue;
-    out.push(decodeEntities(xml.slice(from, close).replace(/<[^>]*>/g, '')));
+    /**
+     * Extract the cell text and unescape entities. Do NOT try to "sanitize" it.
+     *
+     * The old order - strip `<[^>]*>` first, decode after - is the incomplete
+     * sanitizer pattern CodeQL calls out: `<scr<script>ipt>` survives one pass,
+     * and `&lt;script&gt;` *becomes* a tag once decoded. A cell value is data,
+     * not markup: React escapes on render, and the formula-injection guard is
+     * the guard that actually matters for a spreadsheet. Stripping tags also
+     * silently corrupted honest values such as `5 < 7`.
+     */
+    out.push(decodeEntities(xml.slice(from, close)));
     open.lastIndex = close;
   }
   return out;

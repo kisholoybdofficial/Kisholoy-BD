@@ -73,7 +73,12 @@ const isAllowedOrigin = (origin: string | undefined, allowlist: string[]): boole
     const host = new URL(origin).host;
     // Local tooling/preview hosts are explicitly permitted in development.
     if (!config.isProduction && /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return true;
-    if (/\.e2b\.app$/.test(new URL(origin).hostname)) return true;
+    // Sandbox/IDE preview hosts (this review environment). Must stay gated on
+    // `!isProduction` like the localhost rule above: it used to return true in
+    // production as well, which handed credentialed CORS to anyone able to serve
+    // a page from any `*.e2b.app` host - a cross-origin read of admin data with
+    // the victim's session cookie attached.
+    if (!config.isProduction && /\.e2b\.app$/.test(new URL(origin).hostname)) return true;
   } catch {
     return false;
   }

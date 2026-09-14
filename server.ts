@@ -6,6 +6,7 @@
 
 import 'dotenv/config';
 import express from 'express';
+import { randomBytes } from 'node:crypto';
 import { config as platformConfig } from './server/config';
 import { persistence } from './server/persistence/store';
 import { staffAuth } from './server/security/staffStore';
@@ -1713,7 +1714,16 @@ export async function createApp(opts: { apiOnly?: boolean; devVite?: boolean } =
     const endpoint = serverDb.addWebhookEndpoint({
       name: name.trim(),
       url: url.trim(),
-      secret: secret?.trim() || `whsec_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`,
+      /**
+       * A webhook secret from `Math.random()` is a PRNG output with a short
+       * base36 tail: predictable enough that someone who knows roughly when the
+       * endpoint was created can forge signed deliveries. CSPRNG here, and a
+       * caller-supplied secret shorter than 32 chars is not a secret.
+       */
+      secret: (() => {
+        const provided = String(secret?.trim() || '');
+        return provided.length >= 32 ? provided : `whsec_${randomBytes(32).toString('base64url')}`;
+      })(),
       events: events && events.length > 0 ? events : ['order.created', 'order.paid'],
       status: status || 'ACTIVE'
     });
@@ -5237,7 +5247,17 @@ export async function createApp(opts: { apiOnly?: boolean; devVite?: boolean } =
   // -------------------------------------------------------------
   app.get('/sitemap.xml', async (req, res) => {
     try {
-      const site = (platformConfig.appUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+      /**
+       * `APP_URL` is authoritative. The `Host` header is attacker-controlled, so
+       * it is length-capped and shape-checked before it can appear in 46 sitemap
+       * URLs (a poisoned sitemap is SEO spam and a phishing vector), and the
+       * trailing slash is trimmed with a linear loop instead of /\/+$/ - which
+       * CodeQL flagged as polynomial on repeated slashes.
+       */
+      const hostHeader = String(req.get('host') || '').slice(0, 180);
+      const hostOk = /^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(hostHeader);
+      let site = platformConfig.appUrl || (hostOk ? `${req.protocol}://${hostHeader}` : '');
+      while (site.endsWith('/')) site = site.slice(0, -1);
       const products = serverDb.products.filter((p) => !p.isDeleted && (p.status || 'ACTIVE') === 'ACTIVE' && p.slug);
       const urls: string[] = [
         `<url><loc>${site}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,

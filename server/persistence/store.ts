@@ -160,9 +160,16 @@ class PersistenceStore {
   }
 
   private hash(doc: Record<string, unknown>, _idField: string): string {
-    // Full-document digest: cheaper to reason about than a field allow-list and
-    // it cannot miss a change in a field nobody remembered to enumerate.
-    return createHash('sha1').update(JSON.stringify(doc)).digest('hex');
+    /**
+     * Full-document digest: cheaper to reason about than a field allow-list and
+     * it cannot miss a change in a field nobody remembered to enumerate.
+     *
+     * SHA-256 rather than SHA-1. This digest is change detection, never a
+     * security boundary - but a collision-prone hash sitting in the persistence
+     * layer invites the pattern to be copied somewhere it does matter, and the
+     * cost difference at this size is nothing.
+     */
+    return createHash('sha256').update(JSON.stringify(doc)).digest('hex');
   }
 
   /**

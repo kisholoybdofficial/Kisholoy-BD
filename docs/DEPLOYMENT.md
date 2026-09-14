@@ -329,6 +329,19 @@ Not hidden on purpose — see also the PR description.
 - Real gateway credentials (SSLCommerz/bKash sandbox) are not available here, so
   IPN *verification* was proven with signature checks and fake-gateway harnesses
   rather than against the live sandbox (**NOT VERIFIED** end-to-end).
+- Static analysis: CodeQL reports 24 alerts on this branch and the PR gate turns
+  red on them. Eight were real and are fixed in the `fix(security)` follow-up
+  commit (rate-limit key taken from `x-forwarded-for`, `Math.random()` webhook
+  secrets, SHA-1 change digests, stack-shaped error details, an incomplete HTML
+  "sanitizer" in the spreadsheet reader, unschemad image `src`, an unbounded email
+  pattern, and a `*.e2b.app` CORS allowance that leaked into production). The
+  remaining sixteen are "Missing rate limiting" on routes that *are* covered by
+  the tiered `server/http/rateLimit.ts` middleware mounted app-wide — CodeQL's
+  model does not see a custom limiter, so the alerts are informational. Either
+  dismiss them in Security → Code scanning with that reason, or add
+  `x-codeql` suppression comments; do not "fix" them by wrapping handlers again.
+- The SonarCloud `Analysis` check fails on `main` as well as on PRs (no
+  `SONAR_TOKEN` secret in the repository). It is not a signal about your change.
 - Product imagery: the catalogue ships with locally generated art plus a
   placeholder fallback; some SKUs still fall back to the placeholder until a
   photographer's set is dropped into `public/products/`.
