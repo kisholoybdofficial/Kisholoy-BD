@@ -243,7 +243,7 @@ export class ExternalIntegrationsEngine {
       connected: isConfigured,
       status: isConfigured ? 'OPERATIONAL' : 'DISABLED',
       details: isConfigured 
-        ? `Configured to dispatch via ${process.env.EMAIL_FROM || 'Kisholoy Official'}. Official inbox: ${process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com'}`
+        ? `Configured to dispatch via ${process.env.EMAIL_FROM || 'Kisholoy Official'}. Reply-to inbox: ${process.env.SYSTEM_ADMIN_EMAIL || 'not configured (SYSTEM_ADMIN_EMAIL unset)'}`
         : 'RESEND_API_KEY not configured',
       lastChecked: new Date().toISOString(),
       credentialsMasked: masked,

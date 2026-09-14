@@ -4,9 +4,14 @@
  * @license Apache-2.0
  */
 
+import crypto from 'node:crypto';
 import { serverDb } from './db';
 import { CartItem, Order } from '../src/types';
 import { promotionEngine } from './promotionEngine';
+import { config } from './config';
+
+/** Largest quantity a single checkout line may carry (abuse/typography guard). */
+export const MAX_QTY_PER_LINE = 200;
 
 export interface CalculationInput {
   items: Array<{
@@ -65,29 +70,82 @@ export function calculateOrderFinance(input: CalculationInput): VerifiedCalculat
   for (const clientItem of items) {
     let product = serverDb.getProductById(clientItem.productId) || serverDb.getProductBySku(clientItem.productId);
     if (!product) {
-      throw new Error(`Product with ID or SKU "${clientItem.productId}" not found in authoritative catalog.`);
+      /**
+       * A cart line that references a deleted/renamed SKU is a *shopper* error,
+       * not a server fault. Throwing a bare Error here used to answer 500, which
+       * (a) told the customer nothing actionable and (b) made a stale cart look
+       * like an outage — and the message leaked internal wording ("authoritative
+       * catalog") into the response.
+       */
+      throw new CartValidationError('Some items in your cart are no longer available. Please review the cart and try again.', {
+        code: 'PRODUCT_NOT_FOUND',
+        productId: clientItem.productId,
+      });
     }
 
     if (clientItem.quantity <= 0) {
-      throw new Error(`Invalid quantity ${clientItem.quantity} for product "${product.title}".`);
+      throw new CartValidationError('Quantity must be at least 1.', {
+        code: 'QUANTITY_INVALID',
+        productId: clientItem.productId,
+        quantity: clientItem.quantity,
+      });
     }
 
-    // Safeguard demo test environments from stock exhaustion
-    if (product.stock < clientItem.quantity) {
-      product.stock = Math.max(50, product.stock + 50);
+    // ── Authoritative availability check ──────────────────────────────────
+    // This used to be:
+    //     if (product.stock < clientItem.quantity) {
+    //       product.stock = Math.max(50, product.stock + 50);
+    //     }
+    // i.e. when a catalogue ran out, the engine quietly *manufactured* stock so
+    // the demo kept working. In production that is an oversell: the order is
+    // accepted, allocation then fails (or ships a phantom), and the customer is
+    // charged for goods the store does not have. Stock is never invented here.
+    if (!Number.isInteger(clientItem.quantity) || clientItem.quantity > MAX_QTY_PER_LINE) {
+      throw new CartValidationError(
+        `Quantity for "${product.title}" must be a whole number between 1 and ${MAX_QTY_PER_LINE}.`
+      );
+    }
+
+    if (product.status === 'INACTIVE' || product.status === 'ARCHIVED' || product.isDeleted) {
+      throw new CartValidationError(`"${product.title}" is no longer available.`);
+    }
+
+    const availableForSale = availableStockOf(product);
+    if (availableForSale < clientItem.quantity) {
+      const detail =
+        availableForSale <= 0
+          ? `"${product.title}" is out of stock.`
+          : `Only ${availableForSale} unit${availableForSale === 1 ? '' : 's'} of "${product.title}" left.`;
+      throw new CartValidationError(detail, {
+        productId: product.id,
+        available: availableForSale,
+        requested: clientItem.quantity,
+        code: availableForSale <= 0 ? 'OUT_OF_STOCK' : 'INSUFFICIENT_STOCK',
+      });
+    }
+
+    if (!Number.isFinite(product.price) || product.price < 0) {
+      throw new CartValidationError(`"${product.title}" has an invalid price and cannot be sold.`);
     }
 
     let unitPrice = product.price;
     let variantName: string | undefined;
     let itemSku = product.sku;
 
-    if (clientItem.variantId && product.variants) {
+    if (clientItem.variantId && product.variants?.length) {
       const variant = product.variants.find(v => v.id === clientItem.variantId);
-      if (variant) {
-        unitPrice = variant.price;
-        variantName = variant.name;
-        itemSku = variant.sku;
+      if (!variant) {
+        throw new CartValidationError(`The selected option for "${product.title}" is no longer offered.`);
       }
+      if (typeof variant.stock === 'number' && variant.stock < clientItem.quantity) {
+        throw new CartValidationError(
+          `Only ${variant.stock} of "${product.title} — ${variant.name}" left.`,
+          { code: 'INSUFFICIENT_STOCK', productId: product.id, variantId: variant.id }
+        );
+      }
+      unitPrice = variant.price;
+      variantName = variant.name;
+      itemSku = variant.sku;
     }
 
     const lineTotal = unitPrice * clientItem.quantity;
@@ -156,13 +214,12 @@ export function calculateOrderFinance(input: CalculationInput): VerifiedCalculat
     }
   }
 
-  const grandTotal = Math.max(0, subtotal + shippingFee - discount);
+  const grandTotal = Math.max(0, Math.round((subtotal + shippingFee - discount) * 100) / 100);
   const calculatedAt = new Date().toISOString();
 
-  // Simple pseudo-checksum for tamper detection
-  const checksum = Buffer.from(
-    `${subtotal}|${shippingFee}|${discount}|${grandTotal}|${calculatedAt}`
-  ).toString('base64');
+  // Signed quote: a real HMAC the server can re-verify at order time (the
+  // previous "checksum" was base64 of the numbers, which proves nothing).
+  const checksum = signQuote({ subtotal, shippingFee, discount, grandTotal, couponCode, items: verifiedItems, calculatedAt });
 
   return {
     verifiedItems,
@@ -368,3 +425,102 @@ export function performReconciliationScan() {
   };
 }
 
+
+
+/**
+ * Availability respects reserved stock (goods already committed to unpaid
+ * orders) when the catalogue tracks it.
+ */
+export function availableStockOf(product: { stock?: number; reservedStock?: number; trackInventory?: boolean }): number {
+  const stock = Number(product.stock ?? 0);
+  if (product.trackInventory === false) return Number.MAX_SAFE_INTEGER;
+  const reserved = Number(product.reservedStock ?? 0);
+  return Math.max(0, stock - reserved);
+}
+
+/** Error type for cart-level rejections: safe to show to the shopper. */
+export class CartValidationError extends Error {
+  status = 400 as const;
+  code: string;
+  details: Record<string, unknown>;
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'CartValidationError';
+    this.code = (details.code as string) || 'CART_INVALID';
+    this.details = details;
+  }
+}
+
+const QUOTE_TTL_MS = 15 * 60 * 1000;
+
+function quotePayloadString(p: {
+  subtotal: number;
+  shippingFee: number;
+  discount: number;
+  grandTotal: number;
+  couponCode?: string;
+  items: Array<{ productId: string; quantity: number; unitPrice: number }>;
+  calculatedAt: string;
+}): string {
+  const items = p.items.map((i) => `${i.productId}:${i.quantity}:${i.unitPrice}`).sort().join(',');
+  return [p.subtotal, p.shippingFee, p.discount, p.grandTotal, (p.couponCode || '').toUpperCase(), items, p.calculatedAt].join('|');
+}
+
+function quoteSignature(payload: string): string {
+  return crypto.createHmac('sha256', config.sessionSecret).update(payload).digest('base64url').slice(0, 43);
+}
+
+export function signQuote(p: Parameters<typeof quotePayloadString>[0]): string {
+  const payload = quotePayloadString(p);
+  return `${Buffer.from(payload, 'utf8').toString('base64url')}.${quoteSignature(payload)}`;
+}
+
+/**
+ * Verifies a signed checkout quote presented by the client. Guards against a
+ * stale/expired price sheet and coupon replay, but the server ALWAYS recomputes
+ * the order — the quote is a freshness check, never a source of truth.
+ */
+export function verifyQuote(token: string | undefined, recomputed: {
+  subtotal: number;
+  shippingFee: number;
+  discount: number;
+  grandTotal: number;
+  couponCode?: string;
+  items: Array<{ productId: string; quantity: number; unitPrice: number }>;
+}): { ok: boolean; reason?: 'MISSING' | 'MALFORMED' | 'SIGNATURE' | 'EXPIRED' | 'CHANGED'; message?: string } {
+  if (!token) return { ok: false, reason: 'MISSING' };
+  const dot = token.lastIndexOf('.');
+  if (dot <= 0) return { ok: false, reason: 'MALFORMED' };
+  const payloadB64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  let payload = '';
+  try {
+    payload = Buffer.from(payloadB64, 'base64url').toString('utf8');
+  } catch {
+    return { ok: false, reason: 'MALFORMED' };
+  }
+  if (!payload) return { ok: false, reason: 'MALFORMED' };
+
+  const expected = quoteSignature(payload);
+  if (
+    expected.length !== sig.length ||
+    !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig))
+  ) {
+    return { ok: false, reason: 'SIGNATURE', message: 'The price quote was not issued by this server.' };
+  }
+
+  const parts = payload.split('|');
+  const calculatedAt = parts[6];
+  const age = Date.now() - Date.parse(calculatedAt || '');
+  if (!Number.isFinite(age)) return { ok: false, reason: 'MALFORMED' };
+  if (age > QUOTE_TTL_MS) return { ok: false, reason: 'EXPIRED', message: 'Your price quote expired. Please review the totals and confirm again.' };
+
+  const [, , , grandTotalStr] = parts;
+  if (Number(grandTotalStr) !== recomputed.grandTotal) {
+    return { ok: false, reason: 'CHANGED', message: 'Prices or availability changed while you were checking out. Please review the updated total.' };
+  }
+  return { ok: true };
+}
+
+/** Exposed for tests / route reuse. */
+export const quoteTtlMs = QUOTE_TTL_MS;

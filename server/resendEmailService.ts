@@ -73,7 +73,9 @@ export class ResendEmailService {
           subject: params.subject,
           html: params.html,
           text: params.text,
-          reply_to: params.replyTo || process.env.SYSTEM_ADMIN_EMAIL || 'kisholoybd.official@gmail.com',
+          // No personal address in source: with nothing configured the header is
+          // omitted and Resend handles replies from the From address.
+          reply_to: params.replyTo || process.env.SYSTEM_ADMIN_EMAIL || undefined,
           tags: params.tags,
         }),
       });
@@ -170,7 +172,9 @@ export class ResendEmailService {
         ` : ''}
 
         <p style="font-size: 12px; color: #a8a29e; text-align: center; margin-top: 32px; border-top: 1px solid #f5f5f4; padding-top: 16px;">
-          যেকোনো প্রয়োজনে ইমেইল করুন: <a href="mailto:kisholoybd.official@gmail.com" style="color: #134e4a;">kisholoybd.official@gmail.com</a>
+          ${process.env.SYSTEM_ADMIN_EMAIL
+            ? `যেকোনো প্রয়োজনে ইমেইল করুন: <a href="mailto:${process.env.SYSTEM_ADMIN_EMAIL}" style="color: #134e4a;">${process.env.SYSTEM_ADMIN_EMAIL}</a>`
+            : 'যেকোনো প্রয়োজনে আমাদের ওয়েবসাইটের যোগাযোগ পেজ থেকে লিখুন।'}
         </p>
       </td>
     </tr>

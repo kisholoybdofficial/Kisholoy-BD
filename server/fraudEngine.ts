@@ -54,7 +54,7 @@ export class FraudEngine {
     district: string;
     division?: string;
     thana?: string;
-    paymentMethod: 'COD' | 'SSLCOMMERZ' | 'BKASH' | 'MANUAL';
+    paymentMethod: 'COD' | 'SSLCOMMERZ' | 'CARD' | 'BKASH' | 'NAGAD' | 'ROCKET' | 'MANUAL';
     total: number;
     items?: any[];
     clientIp?: string;

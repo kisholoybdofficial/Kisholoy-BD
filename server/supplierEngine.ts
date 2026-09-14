@@ -31,6 +31,8 @@ import {
 import { securityEngine } from './securityEngine';
 import { issueSessionToken } from './sessionTokens';
 import { serverDb } from './db';
+import { persistence } from './persistence/store';
+import { log } from './http/errors';
 import {
   hashSupplierPassword,
   verifySupplierPassword,
@@ -65,9 +67,49 @@ class SupplierEngine {
   private eligibleSales: Map<string, SupplierEligibleSale> = new Map();
   private settlements: Map<string, SupplierSettlement> = new Map();
 
+  private demoInitialised = false;
+
   constructor() {
+    // Demo vendor rows are a *starting point*, not the source of truth: they
+    // are dropped as soon as durable state is hydrated (see hydrateFromStore).
     this.initializeSuppliers();
+    this.demoInitialised = true;
     this.initializeAgreementsAndBatches();
+  }
+
+  /**
+   * Loads durable supplier state and discards the demo seed when the store has
+   * real records. Without this, admin edits to vendors evaporated on restart
+   * and the seeded demo vendors reappeared.
+   */
+  public async hydrateFromStore(): Promise<number> {
+    await persistence.ensureReady();
+    if (!persistence.durable) return this.suppliers.size;
+    try {
+      const docs = await persistence.loadCollection<Supplier>('suppliers', 'id');
+      if (!docs.length) return this.suppliers.size;
+      if (this.demoInitialised) {
+        this.suppliers.clear();
+        this.demoInitialised = false;
+      }
+      for (const doc of docs) this.suppliers.set(doc.id, doc);
+      log.info('suppliers', `hydrated ${docs.length} vendor records`);
+      return docs.length;
+    } catch (err) {
+      log.error('suppliers', 'hydrate_failed', err);
+      return this.suppliers.size;
+    }
+  }
+
+  /** Used by the demo seeder and by tests to insert a vendor verbatim. */
+  public upsertSupplierRecord(supplier: Supplier): void {
+    this.suppliers.set(supplier.id, supplier);
+    void persistence.upsertOne('suppliers', supplier, 'id');
+  }
+
+  /** Whether a supplier record exists (no data exposed). */
+  public hasSupplier(id: string): boolean {
+    return this.suppliers.has(id);
   }
 
   private initializeSuppliers() {
