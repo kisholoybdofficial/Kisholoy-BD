@@ -122,9 +122,14 @@ export function sendInternalError(
 
   // In development the real message is genuinely useful and there is no
   // external audience; in production it never leaves the process.
-  const expose = !config.isProduction;
-  // Even in development the *shape* of a stack (file paths, module layout)
-  // stays in the log; only the human-readable reason is shown.
+  /**
+   * Internal detail never goes on the wire outside a test run. `!isProduction`
+   * used to be the gate, but a development server binds 0.0.0.0 and is reachable
+   * from the network in preview environments, so "dev mode" is not a security
+   * boundary. The reason is logged with a correlation id; the caller gets that id
+   * and nothing else, and tests opt in explicitly with `KISHOLOY_TESTS=1`.
+   */
+  const expose = process.env.KISHOLOY_TESTS === '1' && !config.isProduction;
   const devMessage = expose ? redactInternals(message) || message : null;
   return respondError(
     res,
@@ -144,16 +149,25 @@ export function sendInternalError(
 const NON_CLIENT_KEYS =
   /^(stack|frames?|trace|inner|cause|sql|query|command|config|env|secrets?|password|authorization|token)$/i;
 
-const isStackShaped = (value: string): boolean =>
-  /\n\s+at\s+\S+.*\(.+:\d+:\d+\)/.test(value) ||
-  value.includes('node_modules') ||
-  /\b[\w.\-]+\.(ts|tsx|js|mjs):\d+/.test(value);
+const isStackShaped = (value: string): boolean => {
+  if (value.includes('node_modules')) return true;
+  // Line scan on purpose: the previous form (a `\s+at` pattern with two `.*`
+  // runs) was polynomial on crafted input, which is a worse DoS than the
+  // disclosure it prevents. Frames always start their own line.
+  for (const line of value.split('\n')) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('at ') && trimmed.includes(':')) return true;
+  }
+  return false;
+};
 
-/** Strips absolute paths and `at ... (file:line:col)` frames from a message. */
+/** Drops stack frames and absolute paths from a message before it can be shown. */
 const redactInternals = (value: string): string =>
   value
-    .replace(/\n?\s*at\s+[^\n]*\([^)]*\)/g, '')
-    .replace(/(?:\/home|\/usr|\/opt|[A-Za-z]:\\)[^\s"']+/g, '[path redacted]')
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('at '))
+    .join('\n')
+    .replace(/\/(?:home|usr|opt|var|srv|Users)\/[^\s"']+/g, '[path redacted]')
     .trim();
 
 function respondError(
