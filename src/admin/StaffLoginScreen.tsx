@@ -263,18 +263,18 @@ export function StaffLoginScreen({ onAuthenticated }: StaffLoginScreenProps) {
             {(stage === 'credentials' || stage === 'reset') && (
               <div>
                 <label htmlFor="staff-email" className="block text-xs font-bold text-stone-700 dark:text-slate-300 mb-1.5">
-                  {isBn ? 'অফিসিয়াল ইমেইল' : 'Work email'}
+                  {isBn ? 'অফিসিয়াল ইমেইল বা ইউজারনেম' : 'Work email or username'}
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     id="staff-email"
-                    type="email"
+                    type="text"
                     autoComplete="username"
                     inputMode="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder={isBn ? 'আপনার অফিসিয়াল ইমেইল' : 'you@kisholoy.com'}
+                    placeholder={isBn ? 'admin@kisholoy.com অথবা admin' : 'admin@kisholoy.com or admin'}
                     className={inputCls}
                     required
                   />

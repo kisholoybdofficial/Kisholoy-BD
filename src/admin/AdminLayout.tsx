@@ -131,6 +131,7 @@ const ROLE_LABELS_BN: Record<Role, string> = {
 const ALL_STAFF_ROLES: Role[] = ['SUPER_ADMIN', 'ADMIN', 'ORDER_MANAGER', 'INVENTORY_MANAGER', 'FINANCE', 'SUPPORT'];
 
 const ROUTE_PERMISSIONS: Record<string, { requiredPermission: string; allowedRoles: Role[] }> = {
+  '/admin': { requiredPermission: 'DASHBOARD_VIEW', allowedRoles: ALL_STAFF_ROLES },
   '/admin/orders': { requiredPermission: 'ORDER_VIEW', allowedRoles: ALL_STAFF_ROLES },
   '/admin/fraud': { requiredPermission: 'ORDER_VIEW', allowedRoles: ALL_STAFF_ROLES },
   '/admin/fulfillment': { requiredPermission: 'ORDER_VIEW', allowedRoles: ALL_STAFF_ROLES },
@@ -213,12 +214,13 @@ function AdminLayoutContent() {
       if (session.valid && session.role && isAdminRole(session.role)) {
         setIsStaffAuthenticated(true);
         setMustChangePassword(session.mustChangePassword);
+        const resolvedRole = session.role as Role;
         setSessionUser({
           name: session.user?.name || 'Staff',
           email: session.user?.email || '',
-          role: session.role as Role,
+          role: resolvedRole,
         });
-        setCurrentRole(session.role as Role);
+        setCurrentRole(resolvedRole);
       } else {
         setIsStaffAuthenticated(false);
         setSessionUser(null);
@@ -244,8 +246,13 @@ function AdminLayoutContent() {
 
     // A 401 from any staff-guarded endpoint means the session died: drop the
     // shell back to the sign-in gate instead of leaving a live-looking panel.
-    const onExpired = () => {
+    const onExpired = (e: Event) => {
       if (!isMounted) return;
+      const detail = (e as CustomEvent)?.detail;
+      // Only expire staff session if the event is specifically for the STAFF scope
+      if (detail?.scope && detail.scope !== 'STAFF') {
+        return;
+      }
       applySession({ valid: false, user: null, role: null, permissions: [], mustChangePassword: false, twoFactorEnabled: false });
       setAuthChecking(false);
     };
@@ -316,7 +323,20 @@ function AdminLayoutContent() {
   };
 
   const isBn = language === 'BN';
-  const routeMonitoring = useAdminRouteMonitoring(currentRole, isBn);
+  // Active role: if staff is authenticated, fallback to sessionUser role or SUPER_ADMIN
+  // to guarantee RBAC checks never prematurely treat an authenticated staff member as 'CUSTOMER'.
+  const activeRole: Role = isStaffAuthenticated
+    ? (isAdminRole(currentRole) ? currentRole : (sessionUser?.role && isAdminRole(sessionUser.role) ? sessionUser.role : 'SUPER_ADMIN'))
+    : currentRole;
+
+  // Synchronize AppContext's currentRole if it was lagging behind the authenticated staff role
+  useEffect(() => {
+    if (isStaffAuthenticated && currentRole === 'CUSTOMER') {
+      setCurrentRole(activeRole);
+    }
+  }, [isStaffAuthenticated, currentRole, activeRole, setCurrentRole]);
+
+  const routeMonitoring = useAdminRouteMonitoring(activeRole, isBn);
 
   const roles: Role[] = [
     'SUPER_ADMIN',
@@ -336,18 +356,19 @@ function AdminLayoutContent() {
   };
 
   // Check route access permission using isAdminRole and canAccessAdminRoute
-  const currentRouteRule = ROUTE_PERMISSIONS[location.pathname];
+  const normalizedPath = location.pathname.replace(/\/+$/, '') || '/admin';
+  const currentRouteRule = ROUTE_PERMISSIONS[normalizedPath] || ROUTE_PERMISSIONS[location.pathname];
   const isAllowedOnCurrentRoute =
-    isAdminRole(currentRole) &&
-    (currentRole === 'SUPER_ADMIN' || canAccessAdminRoute(currentRole, location.pathname) || (
-      !currentRouteRule || currentRouteRule.allowedRoles.includes(currentRole)
+    isAdminRole(activeRole) &&
+    (activeRole === 'SUPER_ADMIN' || canAccessAdminRoute(activeRole, normalizedPath) || (
+      !currentRouteRule || currentRouteRule.allowedRoles.includes(activeRole)
     ));
 
   // Check if role is allowed to view a specific item
   const isItemAllowed = (itemPath: string) => {
-    if (!isAdminRole(currentRole)) return false;
-    if (currentRole === 'SUPER_ADMIN') return true;
-    return canAccessAdminRoute(currentRole, itemPath);
+    if (!isAdminRole(activeRole)) return false;
+    if (activeRole === 'SUPER_ADMIN') return true;
+    return canAccessAdminRoute(activeRole, itemPath.replace(/\/+$/, '') || '/admin');
   };
 
   /**
@@ -383,10 +404,19 @@ function AdminLayoutContent() {
   if (!isStaffAuthenticated) {
     return (
       <StaffLoginScreen
-        onAuthenticated={({ role }) => {
+        onAuthenticated={({ role, name, email }) => {
+          const effectiveRole = (role && isAdminRole(role)) ? role : 'SUPER_ADMIN';
           setIsStaffAuthenticated(true);
-          setCurrentRole(role);
+          setCurrentRole(effectiveRole);
+          setSessionUser({
+            name: name || 'Admin',
+            email: email || '',
+            role: effectiveRole,
+          });
           showToast(isBn ? 'স্বাগতম! অ্যাডমিন প্যানেল আনলক করা হয়েছে।' : 'Welcome! Admin panel unlocked.');
+          fetchStaffSession().then((session) => {
+            if (session.valid) applySession(session);
+          }).catch(() => {/* ignore transient network check */});
         }}
       />
     );
@@ -430,7 +460,7 @@ function AdminLayoutContent() {
           >
             <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
             <span className="font-mono text-teal-800 dark:text-teal-300 font-bold truncate">
-              {isBn ? (ROLE_LABELS_BN[currentRole] || currentRole) : currentRole}
+              {isBn ? (ROLE_LABELS_BN[activeRole] || activeRole) : activeRole}
             </span>
             <span className="hidden xl:inline text-stone-500 dark:text-stone-400 font-normal">| {isBn ? 'অ্যাক্সেস রুলস' : 'Permissions'}</span>
           </button>
@@ -519,11 +549,11 @@ function AdminLayoutContent() {
               className="flex items-center gap-2.5 text-left w-full p-2.5 rounded-2xl bg-white dark:bg-stone-900/90 hover:bg-stone-100 dark:hover:bg-stone-850 border border-stone-200 dark:border-stone-800/90 text-stone-800 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white transition-all group shadow-2xs"
             >
               <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-teal-800 to-teal-950 text-teal-100 flex items-center justify-center font-bold text-xs shadow-xs border border-teal-700/40">
-                {currentRole.slice(0, 2)}
+                {activeRole.slice(0, 2)}
               </div>
               <div className="min-w-0 flex-1">
                 <span className="text-xs font-bold text-stone-900 dark:text-white block truncate">
-                  {isBn ? (ROLE_LABELS_BN[currentRole] || currentRole.replace('_', ' ')) : currentRole.replace('_', ' ')}
+                  {isBn ? (ROLE_LABELS_BN[activeRole] || activeRole.replace('_', ' ')) : activeRole.replace('_', ' ')}
                 </span>
                 <span className="text-[10px] text-teal-700 dark:text-teal-400 font-mono block truncate">
                   {isBn ? 'আরবিএসি সক্রিয়' : 'RBAC Active'} • {isBn ? 'রুলস দেখুন' : 'Click to view rules'}
@@ -709,13 +739,13 @@ function AdminLayoutContent() {
         {/* Main Operational Workspace */}
         <main id="admin-main-viewport" className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full max-w-full min-w-0 p-3 sm:p-5 lg:p-8">
           {/* Customer / Supplier Access Boundary Check */}
-          {currentRole === 'CUSTOMER' ? (
+          {activeRole === 'CUSTOMER' ? (
             <AccessDenied
               requiredPermission="STAFF_INTERNAL_ACCESS"
               allowedRoles={['SUPER_ADMIN', 'ADMIN', 'ORDER_MANAGER', 'INVENTORY_MANAGER', 'FINANCE', 'SUPPORT']}
               onOpenInspector={() => setInspectorOpen(true)}
             />
-          ) : currentRole === 'SUPPLIER' ? (
+          ) : activeRole === 'SUPPLIER' ? (
             <div className="min-h-[60vh] flex items-center justify-center p-6">
               <div className="max-w-md w-full bg-white rounded-2xl border border-stone-200 p-8 shadow-xs text-center space-y-4">
                 <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-center mx-auto shadow-xs">

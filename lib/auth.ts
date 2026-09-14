@@ -246,11 +246,13 @@ export async function loginStaff(
     };
   }
 
-  // The browser relies on the httpOnly cookie; the token is kept in memory for
-  // API tooling only, and deliberately NOT written to localStorage any more.
-  if (data.token) setStaffToken(null);
-  if (typeof window !== 'undefined') {
-    (window as unknown as { __kshBearer?: string | null }).__kshBearer = null;
+  // Store token in client memory and session storage so API tooling and
+  // iframe previews can provide Authorization: Bearer along with the session cookie.
+  if (data.token) {
+    setStaffToken(data.token);
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __kshBearer?: string | null }).__kshBearer = data.token;
+    }
   }
 
   return {

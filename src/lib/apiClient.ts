@@ -43,9 +43,44 @@ const purgeLegacyTokenStorage = () => {
   }
 };
 
-export const getStaffToken = (): string | null => memoryStaffToken;
+export const getStaffToken = (): string | null => {
+  if (memoryStaffToken) return memoryStaffToken;
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const saved = sessionStorage.getItem('ksh_staff_token');
+      if (saved) {
+        memoryStaffToken = saved;
+        return saved;
+      }
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  if (typeof window !== 'undefined') {
+    const bearer = (window as unknown as { __kshBearer?: string | null }).__kshBearer;
+    if (bearer) {
+      memoryStaffToken = bearer;
+      return bearer;
+    }
+  }
+  return null;
+};
 export const setStaffToken = (token: string | null) => {
   memoryStaffToken = token;
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (token) {
+        sessionStorage.setItem('ksh_staff_token', token);
+      } else {
+        sessionStorage.removeItem('ksh_staff_token');
+      }
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  if (typeof window !== 'undefined') {
+    (window as unknown as { __kshBearer?: string | null }).__kshBearer = token;
+  }
   if (!token) purgeLegacyTokenStorage();
 };
 export const getCustomerToken = (): string | null => memoryCustomerToken;
@@ -125,13 +160,22 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
 
   const staffToken = getStaffToken();
   const customerToken = getCustomerToken();
+  const path = toPathname(url);
 
   let token: string | null = null;
   if (auth === 'staff') token = staffToken;
   else if (auth === 'customer') token = customerToken;
-  else if (auth === 'auto') token = staffToken || customerToken;
+  else if (auth === 'auto') {
+    const isSupplier = /^\/api\/suppliers?\/portal\//.test(path);
+    if (isSupplier) {
+      token = getSupplierToken() || staffToken;
+    } else if (isStaffGuardedPath(path)) {
+      token = staffToken || customerToken;
+    } else {
+      token = customerToken || staffToken;
+    }
+  }
 
-  const path = toPathname(url);
   const finalHeaders = withCsrf(new Headers(headers || {}), rest.method, path);
   if (token && !finalHeaders.has('Authorization')) {
     finalHeaders.set('Authorization', `Bearer ${token}`);
@@ -140,18 +184,23 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
   const res = await fetch(url, {
     ...rest,
     headers: finalHeaders,
-    // Same-origin sends the session cookie; 'include' is required only for the
-    // allow-listed CORS origins configured server-side.
-    credentials: rest.credentials ?? 'same-origin',
+    // Send cookies in both top-level and iframe preview contexts
+    credentials: rest.credentials ?? 'include',
   });
 
   if (res.status === 401) {
-    const staffGuarded = isStaffGuardedPath(url);
-    if (staffGuarded && staffToken) {
-      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'STAFF' } }));
-    } else if (!staffGuarded) {
-      setCustomerToken(null);
-      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'CUSTOMER' } }));
+    // Endpoints that are expected to return 401 during authentication or login attempts
+    // must NOT trigger a global AUTH_EXPIRED_EVENT.
+    const isPreAuth = /^\/api\/(security\/auth\/(login|session|verify|reset-password)|customer\/auth\/)/.test(path);
+    if (!isPreAuth) {
+      const staffGuarded = isStaffGuardedPath(url);
+      if (staffGuarded && staffToken) {
+        setStaffToken(null);
+        window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'STAFF' } }));
+      } else if (!staffGuarded) {
+        setCustomerToken(null);
+        window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url, scope: 'CUSTOMER' } }));
+      }
     }
   }
 
@@ -234,10 +283,27 @@ export function installApiAuthInterceptor(): void {
     }
     withCsrf(existing, init?.method, path);
 
+    const creds = init?.credentials ?? (input instanceof Request ? input.credentials : undefined) ?? 'include';
+
+    let res: Response;
     if (input instanceof Request && !init) {
-      return nativeFetch(new Request(input, { headers: existing }));
+      res = await nativeFetch(new Request(input, { headers: existing, credentials: creds }));
+    } else {
+      res = await nativeFetch(input as RequestInfo, { ...(init || {}), headers: existing, credentials: creds });
     }
-    return nativeFetch(input as RequestInfo, { ...(init || {}), headers: existing });
+
+    if (res.status === 401) {
+      const isPreAuth = /^\/api\/(security\/auth\/(login|session|verify|reset-password)|customer\/auth\/)/.test(path);
+      if (!isPreAuth) {
+        const staffToken = getStaffToken();
+        const staffGuarded = isStaffGuardedPath(path);
+        if (staffGuarded && staffToken) {
+          setStaffToken(null);
+          window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { url: path, scope: 'STAFF' } }));
+        }
+      }
+    }
+    return res;
   };
 
   const safeDefine = (obj: any): boolean => {
