@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ShieldCheck, Mail, Phone, MapPin, Send, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useSeo } from '../lib/seo';
 
 export function PolicyPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -72,6 +73,17 @@ export function PolicyPage() {
   };
 
   const { title, content, subtitle } = getPageDetails();
+
+  const isBn = language === 'BN';
+  useSeo(
+    {
+      title: `${title} | Kisholoy`,
+      description: subtitle || content?.slice(0, 180),
+      path: `/pages/${slug ?? ''}`,
+      locale: isBn ? 'bn' : 'en',
+    },
+    [slug, language, title]
+  );
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16">

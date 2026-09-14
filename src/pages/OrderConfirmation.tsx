@@ -2,12 +2,26 @@ import React from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { CheckCircle2, Package, Truck, Phone, Calendar, ArrowRight, Printer } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useSeo } from '../lib/seo';
 
 export function OrderConfirmation() {
   const { id } = useParams<{ id: string }>();
   const { orders, language } = useApp();
 
   const order = orders.find((o) => o.id === id || o.orderNumber === id);
+
+  /** Receipt pages hold an order number + address fragment: keep them out of search. */
+  useSeo(
+    {
+      title: order ? `Order ${order.orderNumber} | Kisholoy` : 'Order confirmation | Kisholoy',
+      titleBn: order ? `অর্ডার ${order.orderNumber} | কিশলয়` : 'অর্ডার নিশ্চিতকরণ | কিশলয়',
+      description: 'Your Kisholoy order summary, payment status and delivery timeline.',
+      path: id ? `/order-confirmation/${id}` : '/order-confirmation',
+      private: true,
+      locale: language === 'BN' ? 'bn' : 'en',
+    },
+    [id, order?.orderStatus, language]
+  );
 
   if (!order) {
     return (

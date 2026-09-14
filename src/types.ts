@@ -17,6 +17,8 @@ export type Role =
   | 'INVENTORY_MANAGER' 
   | 'FINANCE' 
   | 'SUPPORT' 
+  /** Read-only internal helper role: can look, cannot change money or catalogue. */
+  | 'STAFF'
   | 'MERCHANT' 
   | 'CUSTOMER'
   | 'SUPPLIER';
@@ -77,30 +79,153 @@ export interface ProductVariant {
   attributes?: Record<string, string>;
 }
 
+/**
+ * ── Generic product architecture ───────────────────────────────────────────
+ * The catalogue is intentionally product-agnostic: nothing in the model assumes
+ * food. A new vertical (say, furniture or auto parts) is added by creating a
+ * category plus its attribute template, never by changing this interface or the
+ * database schema. Free-form `attributes` / `specifications` / `metadata` carry
+ * whatever a category needs; `ProductAttribute` gives them a shared shape so the
+ * admin UI, storefront filters and search can stay generic too.
+ */
+
+export type ProductStatus = 'ACTIVE' | 'DRAFT' | 'INACTIVE' | 'ARCHIVED' | 'OUT_OF_STOCK';
+
+/** How the platform earns the sale: own stock, or someone else's. */
+export type SellingModel = 'IN_HOUSE' | 'VENDOR' | 'DROP_SHIP' | 'PRE_ORDER' | 'MADE_TO_ORDER';
+
+/** What physically has to move to the customer. */
+export type ProductType = 'PHYSICAL' | 'DIGITAL' | 'SERVICE' | 'BUNDLE' | 'GIFT_CARD' | 'SUBSCRIPTION';
+
+export type StockStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'BACKORDER' | 'PRE_ORDER';
+
+/** Perishables need shelf-life; electronics need warranty; both are optional. */
+export type AttributeDataType = 'TEXT' | 'NUMBER' | 'BOOLEAN' | 'SELECT' | 'MULTI_SELECT' | 'MEASURE' | 'DATE';
+
+export interface ProductAttributeValue {
+  /** Stable key from the category attribute template, e.g. `shelf_life_months`. */
+  key: string;
+  label: string;
+  labelBn?: string;
+  value: string | number | boolean | Array<string | number>;
+  /** Unit for MEASURE values, e.g. `g`, `ml`, `cm`, `pcs`. */
+  unit?: string;
+  dataType?: AttributeDataType;
+  /** Show on the storefront spec table (default true). */
+  visible?: boolean;
+  /** Facet-able in search/filter UI. */
+  filterable?: boolean;
+}
+
+export interface ProductSpecification {
+  group: string;
+  groupBn?: string;
+  values: ProductAttributeValue[];
+}
+
+export interface ProductSeo {
+  title?: string;
+  titleBn?: string;
+  description?: string;
+  descriptionBn?: string;
+  keywords?: string[];
+  ogImage?: string;
+  canonicalUrl?: string;
+  noindex?: boolean;
+}
+
+export interface ProductReturnPolicy {
+  returnable: boolean;
+  windowDays?: number;
+  restockable?: boolean;
+  conditionRequired?: string;
+  exceptionsBn?: string;
+  exceptions?: string;
+}
+
+export interface ProductWarranty {
+  applicable: boolean;
+  durationMonths?: number;
+  provider?: string;
+  summary?: string;
+  summaryBn?: string;
+}
+
+/** Costing/profit block that only in-house inventory can fully populate. */
+export interface ProductEconomics {
+  /** What the platform paid (or will pay) per unit. */
+  costPrice?: number;
+  currency?: string;
+  /** Vendor commission percentage when `sellingModel` is VENDOR/DROP_SHIP. */
+  commissionPercent?: number;
+  /** Fixed platform margin per unit, takes precedence when set. */
+  marginPerUnit?: number;
+  taxPercent?: number;
+  taxIncludedInPrice?: boolean;
+}
+
+export interface ProductProcurement {
+  supplierLeadTimeDays?: number;
+  minOrderQuantity?: number;
+  reorderPoint?: number;
+  reorderQuantity?: number;
+  storageLocation?: string;
+  batchTracked?: boolean;
+  lastRestockedAt?: string;
+}
+
 export interface Product {
   id: string;
   title: string;
   titleBn: string;
   slug: string;
+  shortDescription?: string;
+  shortDescriptionBn?: string;
   description: string;
   descriptionBn: string;
   price: number;
+  /** Pre-discount ticket price, when a campaign is running. */
   originalPrice?: number;
   costPrice: number;
+  /** Percentage; `taxIncludedInPrice` decides whether it is additive. */
   taxRate?: number;
+  taxIncludedInPrice?: boolean;
+  /** Legacy name for the sourcing partner; `vendorId` is the canonical one. */
   supplierId?: string;
+  vendorId?: string;
+  vendorName?: string;
+  vendorNameBn?: string;
   sku: string;
+  barcode?: string;
   category: string;
   categorySlug: string;
+  subcategory?: string;
+  subcategorySlug?: string;
+  brand?: string;
+  productType?: ProductType;
+  sellingModel?: SellingModel;
   images: string[];
+  thumbnail?: string;
+  gallery?: Array<{ url: string; alt?: string; altBn?: string; caption?: string }>;
   stock: number;
+  /** Units committed to open orders but not yet shipped. */
+  reservedStock?: number;
   lowStockThreshold?: number;
+  /** When false the storefront never blocks a sale on quantity (digital/service). */
+  trackInventory?: boolean;
+  stockStatus?: StockStatus;
+  unit?: string;
+  unitBn?: string;
+  weightGrams?: number;
+  dimensions?: { length?: number; width?: number; height?: number; unit?: 'cm' | 'in' };
   rating: number;
   reviewsCount: number;
   badge?: string;
   badgeBn?: string;
   isFeatured?: boolean;
   featured?: boolean;
+  isBestseller?: boolean;
+  isNewArrival?: boolean;
   readyToShip: boolean;
   variants?: ProductVariant[];
   origin?: string;
@@ -108,7 +233,48 @@ export interface Product {
     material?: string;
     origin?: string;
     weight?: string;
+    [key: string]: string | number | boolean | undefined;
   };
+  /** Category-driven, fully dynamic attributes (the extensibility valve). */
+  customAttributes?: ProductAttributeValue[];
+  specifications?: ProductSpecification[];
+  tags?: string[];
+  keywords?: string[];
+  status?: ProductStatus;
+  /** Soft delete: keeps historical order lines resolvable. */
+  isDeleted?: boolean;
+  deletedAt?: string;
+  returnPolicy?: ProductReturnPolicy;
+  warranty?: ProductWarranty;
+  seo?: ProductSeo;
+  economics?: ProductEconomics;
+  procurement?: ProductProcurement;
+  /** Free-form, admin-editable bag. Never used for money math. */
+  metadata?: Record<string, string | number | boolean | null>;
+  publishedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Demo/seed provenance marker; used to keep seeded data identifiable. */
+  isDemo?: boolean;
+}
+
+/** Derived helpers shared by server and client (never trust the client copy). */
+export const productAvailableStock = (p: Pick<Product, 'stock' | 'reservedStock' | 'trackInventory'>): number =>
+  p.trackInventory === false ? Number.MAX_SAFE_INTEGER : Math.max(0, (p.stock || 0) - (p.reservedStock || 0));
+
+export const productEffectivePrice = (p: Pick<Product, 'price'>, variant?: { price: number } | null): number =>
+  variant ? variant.price : p.price;
+
+export interface CategoryAttributeTemplateField {
+  key: string;
+  label: string;
+  labelBn?: string;
+  dataType: AttributeDataType;
+  unit?: string;
+  options?: string[];
+  required?: boolean;
+  filterable?: boolean;
+  showInSpecTable?: boolean;
 }
 
 export interface Category {
@@ -117,9 +283,36 @@ export interface Category {
   nameBn: string;
   slug: string;
   description: string;
+  descriptionBn?: string;
   image: string;
+  icon?: string;
   itemCount: number;
   featured?: boolean;
+  /** Enables an unbounded category tree without touching the model. */
+  parentId?: string | null;
+  level?: number;
+  order?: number;
+  status?: 'ACTIVE' | 'HIDDEN' | 'DRAFT';
+  /** Which attributes products in this category are expected to carry. */
+  attributeTemplate?: CategoryAttributeTemplateField[];
+  /** Delivery handling hints: fragile items, cold chain, hazardous goods. */
+  handling?: {
+    fragile?: boolean;
+    perishable?: boolean;
+    temperature?: 'AMBIENT' | 'CHILLED' | 'FROZEN' | 'HOT';
+    hazardous?: boolean;
+    maxUnitsPerParcel?: number;
+  };
+  seo?: {
+    title?: string;
+    titleBn?: string;
+    description?: string;
+    descriptionBn?: string;
+    keywords?: string[];
+    image?: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CartItem {
@@ -186,6 +379,8 @@ export interface OrderChannelDetails {
 
 export interface OrderAdvancePayment {
   isPaid: boolean;
+  /** How the `isPaid` claim was established (never trusted from the client). */
+  verificationState?: 'GATEWAY_VERIFIED' | 'CLIENT_CLAIMED_UNVERIFIED' | 'MANUALLY_VERIFIED';
   amount: number;
   method: 'BKASH' | 'NAGAD' | 'ROCKET' | 'BANK' | 'CASH' | 'OTHER';
   trxId?: string;
@@ -240,7 +435,11 @@ export interface Order {
   total: number;
   grandTotal?: number; // alias
   balanceDueCod?: number;
-  paymentMethod: 'COD' | 'SSLCOMMERZ' | 'BKASH' | 'MANUAL';
+  /**
+   * Payment rail the customer chose. `COD`/`MANUAL` never depend on a gateway;
+   * the rest are only PAID once the gateway confirms server-side.
+   */
+  paymentMethod: 'COD' | 'SSLCOMMERZ' | 'CARD' | 'BKASH' | 'NAGAD' | 'ROCKET' | 'MANUAL';
   paymentStatus: PaymentStatus;
   settlementStatus: SettlementStatus;
   orderStatus: OrderStatus;
@@ -257,6 +456,22 @@ export interface Order {
   verificationStatus?: 'UNVERIFIED' | 'PHONE_VERIFIED' | 'ADVANCE_PAID' | 'MANUALLY_OVERRIDDEN' | 'REJECTED';
   verificationNotes?: string;
   advancePaymentTrxId?: string;
+  /** Records which mode produced a PAID state: a real gateway, or a demo flag. */
+  paymentGatewayMode?: 'LIVE' | 'SANDBOX' | 'UNCONFIGURED' | 'DEMO';
+  /**
+   * A customer-declared mobile-banking payment that no one has verified yet.
+   * Purely informational until finance confirms it — it never implies `PAID`.
+   */
+  manualPaymentClaim?: {
+    method: 'BKASH' | 'NAGAD' | 'ROCKET' | 'BANK' | 'OTHER';
+    reference: string;
+    claimedAmount: number;
+    submittedAt: string;
+    verified: boolean;
+    verifiedBy?: string;
+  };
+  /** Client-generated key that makes a double-submitted checkout idempotent. */
+  idempotencyKey?: string;
   advancePaymentAmount?: number;
   appliedCouponCode?: string;
   loyaltyPointsEarned?: number;
@@ -292,6 +507,17 @@ export interface Customer {
   defaultAddress: string;
   address?: string; // alias for defaultAddress
   status: 'ACTIVE' | 'BLOCKED';
+  // --- Account security (server-only; stripped from every API response) ---
+  /** scrypt hash of the shopper's password. Absent = guest CRM record. */
+  passwordHash?: string;
+  passwordUpdatedAt?: string;
+  mustChangePassword?: boolean;
+  /** Sessions issued before this epoch (ms) are rejected. */
+  sessionsInvalidBefore?: number;
+  /** Normalised `+8801XXXXXXXXX` used as the unique login key. */
+  phoneCanonical?: string;
+  emailVerified?: boolean;
+  lastLoginAt?: string;
   whatsappNumber?: string;
   socialProfile?: string;
   preferredChannel?: OrderSourceChannel;
@@ -732,7 +958,25 @@ export interface AuditLog {
   signature?: string;
 }
 
+/**
+ * Storefront-level metadata the CMS owns. Search engines and link previews read
+ * this before any JS runs on the target page, so it lives with the rest of the
+ * site content and is edited in Admin → Content Studio → SEO, never in code.
+ */
+export interface SiteSeo {
+  title?: string;
+  titleBn?: string;
+  description?: string;
+  descriptionBn?: string;
+  /** Absolute or site-root path used for `og:image` on pages without their own art. */
+  ogImage?: string;
+  keywords?: string[];
+  /** Escape hatch for a storefront-wide `noindex` during a soft launch. */
+  noindex?: boolean;
+}
+
 export interface SiteContent {
+  seo?: SiteSeo;
   brandName: string;
   brandNameBn: string;
   tagline: string;
@@ -1753,8 +1997,10 @@ export interface BackupScheduleConfig {
   retentionDays: number;
   storageDestination: 'LOCAL_AND_S3' | 'LOCAL_ONLY' | 'OFFSITE_ONLY';
   autoPruneOld: boolean;
-  lastRunAt: string;
-  nextRunAt: string;
+  /** When a snapshot was actually last taken — null until one exists. */
+  lastRunAt: string | null;
+  /** Only meaningful with an external scheduler; null when nothing is scheduled. */
+  nextRunAt: string | null;
 }
 
 export interface GoogleDriveConfig {
@@ -1798,12 +2044,14 @@ export interface GoogleDriveFileItem {
 export interface DisasterRecoveryMetrics {
   rtoTargetMinutes: number; // Recovery Time Objective (target < 5 min)
   rpoTargetMinutes: number; // Recovery Point Objective (target < 60 min)
-  actualRtoSeconds: number;
-  actualRpoMinutes: number;
-  lastDrillAt: string;
-  drillStatus: 'PASSED' | 'WARNING' | 'FAILED';
+  /** Measured by a real drill or restore — null until one has actually run. */
+  actualRtoSeconds: number | null;
+  actualRpoMinutes: number | null;
+  lastDrillAt: string | null;
+  drillStatus: 'PASSED' | 'WARNING' | 'FAILED' | 'NOT_RUN';
   failoverReadiness: 'READY' | 'DEGRADED' | 'STANDBY';
-  activeColdStorageVault: string;
+  /** Offsite tier taken from configuration; null when backups are local-only. */
+  activeColdStorageVault: string | null;
   totalRestoresExecuted: number;
   lastFailsafeSnapshotId?: string;
 }

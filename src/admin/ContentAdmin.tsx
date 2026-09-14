@@ -3,7 +3,7 @@ import {
   FileText, Save, CheckCircle2, Globe, Bell, Shield, Phone, Sparkles, 
   Layers, Image as ImageIcon, Eye, RotateCcw, Upload, Sliders, ExternalLink, 
   Smartphone, Monitor, History, Check, AlertCircle, Plus, Trash2, ArrowUp, 
-  ArrowDown, HelpCircle, Truck, Info, RefreshCw, Send, Tag
+  ArrowDown, HelpCircle, Truck, Info, RefreshCw, Send, Tag, Search
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { SiteContent, ContentRevision } from '../types';
@@ -12,6 +12,7 @@ import { BrandLogoManager } from '../components/brand/BrandLogoManager';
 
 type CmsSection = 
   | 'brand' 
+  | 'seo' 
   | 'announcement' 
   | 'hero' 
   | 'promo_banners' 
@@ -148,6 +149,8 @@ export function ContentAdmin() {
         ...prev,
         promoBanners: (prev.promoBanners || []).map(b => b.id === promoId ? { ...b, image: url } : b)
       }));
+    } else if (imagePickerTarget === 'seo-og') {
+      setDraft(prev => ({ ...prev, seo: { ...(prev.seo || {}), ogImage: url } }));
     }
 
     setImagePickerTarget(null);
@@ -156,6 +159,7 @@ export function ContentAdmin() {
 
   const sectionsList: { id: CmsSection; label: string; icon: any; badge?: string }[] = [
     { id: 'brand', label: 'Brand Identity & Meta', icon: Globe },
+    { id: 'seo', label: 'SEO & Link Previews', icon: Search },
     { id: 'announcement', label: 'Announcement Bar', icon: Bell },
     { id: 'hero', label: 'Hero Banner & Carousel', icon: Sparkles },
     { id: 'promo_banners', label: 'Campaign & Promo Cards', icon: Tag, badge: `${draft.promoBanners?.length || 0}` },
@@ -646,6 +650,160 @@ export function ContentAdmin() {
             )}
 
             {/* 2. Announcement Bar */}
+
+            {activeSection === 'seo' && (
+              <div className="space-y-5">
+                <div className="border-b border-stone-200 pb-3">
+                  <h3 className="text-base font-bold text-stone-900">Search &amp; Social Metadata</h3>
+                  <p className="text-xs text-stone-500">
+                    Defaults for the storefront homepage and for any page that has no artwork of its own. Product and
+                    category pages override these with their own SEO fields; private routes (checkout, account, admin)
+                    are always marked <code className="bg-stone-100 px-1 rounded">noindex,nofollow</code>.
+                  </p>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  <div>
+                    <label className="font-bold text-stone-700 block mb-1">
+                      Homepage Title (English) — {draft.seo?.title?.length || 0}/70 chars
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={90}
+                      value={draft.seo?.title || ''}
+                      onChange={(e) => setDraft({ ...draft, seo: { ...(draft.seo || {}), title: e.target.value } })}
+                      className="w-full p-2.5 border border-stone-300 rounded-lg"
+                      placeholder="KISHOLOY | Premium Bangladesh E-Commerce"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-stone-700 block mb-1">
+                      Homepage Title (Bangla) — {draft.seo?.titleBn?.length || 0}/70 chars
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={90}
+                      value={draft.seo?.titleBn || ''}
+                      onChange={(e) => setDraft({ ...draft, seo: { ...(draft.seo || {}), titleBn: e.target.value } })}
+                      className="w-full p-2.5 border border-stone-300 rounded-lg font-bangla"
+                      placeholder="কিশলয় | বাংলাদেশের প্রিমিয়াম ই-কমার্স"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-stone-700 block mb-1">
+                      Meta Description (English) — {draft.seo?.description?.length || 0}/160 chars
+                    </label>
+                    <textarea
+                      rows={3}
+                      maxLength={220}
+                      value={draft.seo?.description || ''}
+                      onChange={(e) =>
+                        setDraft({ ...draft, seo: { ...(draft.seo || {}), description: e.target.value } })
+                      }
+                      className="w-full p-2.5 border border-stone-300 rounded-lg"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-stone-700 block mb-1">
+                      Meta Description (Bangla) — {draft.seo?.descriptionBn?.length || 0}/160 chars
+                    </label>
+                    <textarea
+                      rows={3}
+                      maxLength={220}
+                      value={draft.seo?.descriptionBn || ''}
+                      onChange={(e) =>
+                        setDraft({ ...draft, seo: { ...(draft.seo || {}), descriptionBn: e.target.value } })
+                      }
+                      className="w-full p-2.5 border border-stone-300 rounded-lg font-bangla"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="font-bold text-stone-700 block mb-1">Default Share Image (og:image)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={draft.seo?.ogImage || ''}
+                          onChange={(e) =>
+                            setDraft({ ...draft, seo: { ...(draft.seo || {}), ogImage: e.target.value } })
+                          }
+                          className="w-full p-2.5 border border-stone-300 rounded-lg"
+                          placeholder="/brand/kisholoy-og.png"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setImagePickerTarget('seo-og')}
+                          className="px-3 py-2 bg-stone-100 border border-stone-300 rounded-lg font-bold hover:bg-stone-200"
+                        >
+                          <ImageIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-stone-500 mt-1">
+                        1200×630 recommended. Relative paths resolve against the live origin.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-stone-700 block mb-1">
+                        Keywords (comma separated, optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={(draft.seo?.keywords || []).join(', ')}
+                        onChange={(e) =>
+                          setDraft({
+                            ...draft,
+                            seo: {
+                              ...(draft.seo || {}),
+                              keywords: e.target.value
+                                .split(',')
+                                .map((k) => k.trim())
+                                .filter(Boolean),
+                            },
+                          })
+                        }
+                        className="w-full p-2.5 border border-stone-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2 cursor-pointer p-3 rounded-lg bg-amber-50 border border-amber-200">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.seo?.noindex)}
+                      onChange={(e) => setDraft({ ...draft, seo: { ...(draft.seo || {}), noindex: e.target.checked } })}
+                      className="mt-0.5 rounded border-stone-300 text-teal-600 focus:ring-teal-500 h-4 w-4"
+                    />
+                    <span>
+                      <span className="block font-bold text-stone-800">
+                        Temporarily hide the whole storefront from search engines
+                      </span>
+                      <span className="block text-[11px] text-stone-600 mt-0.5 font-normal">
+                        Emits <code>noindex,nofollow</code> on every public page. Use during a soft launch or a data
+                        migration, then switch it back off — long-term use also removes the pages from the sitemap's
+                        value.
+                      </span>
+                    </span>
+                  </label>
+
+                  <div className="p-3 rounded-lg bg-teal-50 border border-teal-200 text-teal-900 text-[11px] leading-relaxed">
+                    <strong className="block mb-0.5">Preview</strong>
+                    <span className="block font-semibold truncate">{draft.seo?.title || 'KISHOLOY | (fallback title)'}</span>
+                    <span className="block text-teal-800/80 truncate">
+                      {typeof window !== 'undefined' ? window.location.origin : 'https://your-domain'}
+                    </span>
+                    <span className="block text-stone-700 mt-0.5">
+                      {draft.seo?.description || 'Fallback description is used when this field is empty.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {activeSection === 'announcement' && (
               <div className="space-y-5">
                 <div className="border-b border-stone-200 pb-3 flex items-center justify-between">

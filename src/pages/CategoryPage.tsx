@@ -2,6 +2,8 @@ import React from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ProductGrid } from '../components/ProductGrid';
 import { useApp } from '../context/AppContext';
+import { ProductImage } from '../components/ProductImage';
+import { useSeo, breadcrumbStructuredData } from '../lib/seo';
 import { ArrowLeft } from 'lucide-react';
 
 export function CategoryPage() {
@@ -9,6 +11,37 @@ export function CategoryPage() {
   const { categories, language } = useApp();
 
   const category = categories.find((c) => c.slug === slug);
+  const isBn = language === 'BN';
+
+  // Runs before the not-found branch: hooks may not sit behind an early return.
+  useSeo(
+    {
+      title: category ? `${category.name} | Kisholoy` : 'Category not found | Kisholoy',
+      titleBn: category
+        ? `${category.nameBn || category.name} | কিশলয়`
+        : 'ক্যাটাগরি পাওয়া যায়নি | কিশলয়',
+      description:
+        category?.description ||
+        'Browse the Kisholoy collection — in-house and artisan products sourced across Bangladesh, with nationwide delivery.',
+      descriptionBn:
+        category?.descriptionBn ||
+        'কিশলয়ের ক্যাটালগ থেকে নিজস্ব ও যাচাইকৃত কারিগরের পণ্য কিনুন—সদেশে ডেলিভারিসহ।',
+      path: `/category/${slug ?? ''}`,
+      image: category?.image,
+      imageAlt: category ? (isBn ? category.nameBn : category.name) : undefined,
+      locale: isBn ? 'bn' : 'en',
+      /** Unknown or hidden slugs should not be crawlable dead ends. */
+      private: !category || (category.status !== undefined && category.status !== 'ACTIVE'),
+      structuredData: category
+        ? breadcrumbStructuredData([
+            { name: 'Home', url: '/' },
+            { name: 'Shop', url: '/shop' },
+            { name: category.name, url: `/category/${category.slug}` },
+          ])
+        : undefined,
+    },
+    [slug, category?.id, language]
+  );
 
   if (!category && slug !== 'all') {
     return (
@@ -33,10 +66,11 @@ export function CategoryPage() {
 
       <div className="relative rounded-2xl overflow-hidden bg-stone-900 text-white p-8 sm:p-12 mb-10 border border-stone-800 dark:border-slate-700">
         {category?.image && (
-          <img
+          <ProductImage
             src={category.image}
             alt={name}
-            className="absolute inset-0 w-full h-full object-cover object-center opacity-30"
+            fill
+            imgClassName="object-cover object-center opacity-30"
           />
         )}
         <div className="relative z-10 max-w-2xl">

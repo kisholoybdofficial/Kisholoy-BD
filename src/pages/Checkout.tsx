@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext';
 import { SslcommerzModal } from '../components/payment/SslcommerzModal';
 import { BkashModal } from '../components/payment/BkashModal';
 import { getStoredUtmPayload } from '../utils/utmCapture';
+import { useSeo } from '../lib/seo';
 
 export function Checkout() {
   const { cart, cartSubtotal, siteContent, createOrder, clearCart, syncServerOrder, language, showToast, savedAddresses, customerProfile } = useApp();
@@ -27,10 +28,47 @@ export function Checkout() {
   const [errorMessage, setErrorMessage] = useState('');
   const [isRecalculating, setIsRecalculating] = useState(false);
 
+  /**
+   * What the server can actually do with money *right now*, fetched from
+   * `/api/payments/capabilities` instead of assumed. A gateway button that the
+   * store has not configured produces the worst possible outcome: the shopper
+   * believes they paid while the ledger says otherwise. When the capability is
+   * UNCONFIGURED the option is visibly unavailable and the submit path refuses
+   * it; until the probe answers we optimistically render the option.
+   */
+  const [paymentCaps, setPaymentCaps] = useState<
+    { sslcommerz: string; bkash: string; nagad: string; demoPaymentsAllowed: boolean } | null
+  >(null);
+
+  React.useEffect(() => {
+    let active = true;
+    fetch('/api/payments/capabilities', { credentials: 'same-origin' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data?.capabilities) setPaymentCaps(data.capabilities);
+      })
+      .catch(() => {
+        /* best effort: the submit guard below still refuses to fake a gateway */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const sslGatewayReady = paymentCaps ? paymentCaps.sslcommerz !== 'UNCONFIGURED' : true;
+  const bkashGatewayReady = paymentCaps ? paymentCaps.bkash !== 'UNCONFIGURED' : true;
+
   // Gateway modal states
   const [isSslModalOpen, setIsSslModalOpen] = useState(false);
   const [isBkashModalOpen, setIsBkashModalOpen] = useState(false);
   const [activeGatewayOrder, setActiveGatewayOrder] = useState<any>(null);
+  /**
+   * One key per checkout attempt (regenerated if the cart is rebuilt) so a
+   * double-click, a browser retry or a flaky network cannot create duplicates.
+   */
+  const idempotencyKey = React.useRef<string>(
+    `chk-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
 
   // Fallback financial calculation
   const initialShipping = division === 'Dhaka' 
@@ -49,6 +87,23 @@ export function Checkout() {
   }, [division, cartSubtotal, siteContent.shippingFees]);
 
   const grandTotal = Math.max(0, cartSubtotal + shippingFee - discount);
+
+  /**
+   * Checkout collects PII and holds an order intent: noindex,nofollow here and
+   * an explicit Disallow in robots.txt, so a shared link never leaks into a
+   * search result.
+   */
+  useSeo(
+    {
+      title: 'Secure checkout | Kisholoy',
+      titleBn: 'নিরাপদ চেকআউট | কিশলয়',
+      description: 'Confirm delivery details, coupon and payment method. Every amount is recalculated on the server.',
+      path: '/checkout',
+      private: true,
+      locale: language === 'BN' ? 'bn' : 'en',
+    },
+    [language, cart.length, paymentMethod]
+  );
 
   const handleApplyCoupon = async () => {
     if (!couponCode.trim()) return;
@@ -84,15 +139,13 @@ export function Checkout() {
         setErrorMessage(valData.evaluation?.errorReason || valData.error || 'Invalid coupon code or conditions not met.');
       }
     } catch {
-      // Local fallback calculation for coupon
-      if (couponCode.toUpperCase() === 'KISHOLOY10') {
-        const disc = Math.round(cartSubtotal * 0.1);
-        setDiscount(disc);
-        setAppliedCoupon({ code: 'KISHOLOY10', discountAmount: disc, description: '10% Heritage Discount' });
-        showToast('Coupon "KISHOLOY10" applied successfully!');
-      } else {
-        setErrorMessage('Invalid coupon code.');
-      }
+      // No client-side discount is ever applied. A coupon the server could not
+      // verify is not a discount the customer is entitled to — pretending
+      // otherwise produced baskets that failed at order creation with a
+      // different total than the shopper had confirmed.
+      setDiscount(0);
+      setAppliedCoupon(null);
+      setErrorMessage('We could not reach the coupon service, so no discount was applied. Please try again.');
     } finally {
       setIsRecalculating(false);
     }
@@ -124,12 +177,60 @@ export function Checkout() {
       return;
     }
 
+    // Never start an order whose payment rail does not exist on the server.
+    if (paymentMethod === 'SSLCOMMERZ' && !sslGatewayReady) {
+      const blocked =
+        language === 'BN'
+          ? 'অনলাইন পেমেন্ট গেটওয়ে এখনো চালু করা হয়নি। দয়া করে ক্যাশ অন ডেলিভারি বেছে নিন—অনলাইন পেমেন্ট চালু হলে আমরা জানাব।'
+          : 'Online card/mobile payment is not connected yet, so we cannot take payment that way. Please choose Cash on Delivery for now.';
+      setErrorMessage(blocked);
+      showToast(blocked, 'info');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      // 1. Try server-side authoritative order creation first
+      // Ask the server for a signed quote first: it recomputes price, stock,
+      // delivery and coupon, and hands back a token that order creation can
+      // check, so the total confirmed here cannot silently change.
+      let quoteToken: string | undefined;
+      try {
+        const quoteRes = await fetch('/api/checkout/calculate', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: cart.map((i) => ({ productId: i.productId, variantId: i.variantId, quantity: i.quantity })),
+            division,
+            district: district.trim(),
+            couponCode: appliedCoupon?.code,
+          }),
+        });
+        const quoteData = await quoteRes.json().catch(() => null);
+        if (quoteRes.ok && quoteData?.success) {
+          quoteToken = quoteData.quoteToken;
+          // Reflect any server-side correction (price change, stock cap, free shipping).
+          if (typeof quoteData.data?.shippingFee === 'number') setShippingFee(quoteData.data.shippingFee);
+          if (typeof quoteData.data?.discount === 'number') setDiscount(quoteData.data.discount);
+        } else if (quoteData?.error) {
+          setErrorMessage(quoteData.errorBn || quoteData.error);
+          setIsSubmitting(false);
+          return;
+        }
+      } catch {
+        // Quote is an optimisation; order creation re-validates regardless.
+        quoteToken = undefined;
+      }
+
+      // Server-side authoritative order creation. There is deliberately NO
+      // client-side "fallback order": the previous code minted a local order
+      // object when the API failed and navigated to a confirmation page for an
+      // order that did not exist in the database. A failure now *looks* like a
+      // failure, because it is one.
       const serverRes = await fetch('/api/orders/create', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer: {
@@ -157,96 +258,66 @@ export function Checkout() {
           paymentMethod,
           couponCode: appliedCoupon?.code,
           notes: notes.trim() || undefined,
+          quoteToken,
+          // Retrying this submit can never create a second order.
+          idempotencyKey: idempotencyKey.current || undefined,
           // Marketing Command Center: first-touch UTM auto-tag (metadata only, re-sanitized server-side)
           utm: getStoredUtmPayload() || undefined
         })
       });
 
-      if (serverRes.ok) {
-        const serverData = await serverRes.json();
-        if (serverData.success && serverData.order) {
-          const sOrder = serverData.order;
-          // Sync client context with server-created order
-          syncServerOrder(sOrder);
-          clearCart();
+      const serverData = await serverRes.json().catch(() => null);
 
-          // Check if online gateway flow required
-          if (paymentMethod === 'SSLCOMMERZ') {
-            setActiveGatewayOrder(sOrder);
-            setIsSslModalOpen(true);
-            return;
-          } else if (paymentMethod === 'BKASH') {
-            setActiveGatewayOrder(sOrder);
-            setIsBkashModalOpen(true);
-            return;
-          }
+      if (serverRes.ok && serverData?.success && serverData.order) {
+        const sOrder = serverData.order;
+        // Sync client context with server-created order
+        syncServerOrder(sOrder);
+        clearCart();
+        setActiveGatewayOrder(sOrder);
 
-          navigate(`/order-confirmation/${sOrder.id}`);
+        if (paymentMethod === 'SSLCOMMERZ') {
+          setIsSslModalOpen(true);
           return;
         }
-      }
+        if (paymentMethod === 'BKASH') {
+          setIsBkashModalOpen(true);
+          return;
+        }
 
-      // Fallback to client state manager if server is cold
-      const orderItems = cart.map(item => ({
-        productId: item.productId,
-        title: item.title,
-        titleBn: item.titleBn,
-        price: item.price,
-        quantity: item.quantity,
-        image: item.image,
-        sku: item.sku,
-        variantName: item.variantName
-      }));
-
-      const newOrder = createOrder({
-        customer: {
-          name: `${firstName.trim()} ${lastName.trim()}`.trim(),
-          phone: phone.trim(),
-          email: email.trim() || undefined
-        },
-        shippingAddress: {
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          phone: phone.trim(),
-          email: email.trim() || undefined,
-          address: address.trim(),
-          division,
-          district: district.trim(),
-          thana: thana.trim(),
-          postalCode: postalCode.trim() || undefined,
-          notes: notes.trim() || undefined
-        },
-        paymentMethod,
-        items: orderItems,
-        shippingFee,
-        discount,
-        notes: notes.trim() || undefined
-      });
-
-      if (paymentMethod === 'SSLCOMMERZ') {
-        setActiveGatewayOrder(newOrder);
-        setIsSslModalOpen(true);
-        return;
-      } else if (paymentMethod === 'BKASH') {
-        setActiveGatewayOrder(newOrder);
-        setIsBkashModalOpen(true);
+        navigate(`/order-confirmation/${sOrder.id}`);
         return;
       }
 
-      navigate(`/order-confirmation/${newOrder.id}`);
+      // Everything below is a genuine failure of order creation.
+      const reason =
+        serverData?.errorBn ||
+        serverData?.error ||
+        (serverRes.status === 409
+          ? 'Some items in your cart changed while you were checking out. Please review the totals and confirm again.'
+          : 'We could not place your order. Your cart has been kept — please try again.');
+      setErrorMessage(reason);
+      showToast(reason, 'info');
     } catch {
-      setErrorMessage('Failed to place order. Please check connection and try again.');
+      setErrorMessage('We could not reach the store. Your cart is safe — please check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  /**
+   * After the shopper returns from the gateway we ask OUR server to verify the
+   * transaction. The banner text is derived from the server's verdict, never
+   * assumed — an unverified payment says so plainly.
+   */
   const handleSslSuccess = async (valId: string, cardType: string) => {
     setIsSslModalOpen(false);
     if (!activeGatewayOrder) return;
+    let verdict = 'pending';
+    let detail = '';
     try {
-      await fetch('/api/payments/sslcommerz/validate', {
+      const res = await fetch('/api/payments/sslcommerz/validate', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           val_id: valId,
@@ -255,31 +326,76 @@ export function Checkout() {
           card_type: cardType
         })
       });
-      showToast('Payment verified successfully via SSLCOMMERZ!');
-    } catch (e) {
-      console.error(e);
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.verified) {
+        verdict = data.demoMode ? 'demo' : 'paid';
+      } else {
+        verdict = 'pending';
+        detail = data?.errorBn || data?.error || '';
+      }
+    } catch {
+      verdict = 'pending';
+      detail = 'We could not reach the payment service to confirm your payment yet.';
     }
-    navigate(`/order-confirmation/${activeGatewayOrder.id}`);
+
+    if (verdict === 'paid') showToast('Payment verified by the gateway. Thank you!');
+    else if (verdict === 'demo') showToast('Demo payment recorded — no real money moved.', 'info');
+    else showToast(detail || 'Your order is placed. Payment is still awaiting confirmation from the gateway.', 'info');
+
+    navigate(`/order-confirmation/${activeGatewayOrder.id}?payment=${verdict}`);
   };
 
-  const handleBkashSuccess = async (trxId: string) => {
+  const handleBkashSuccess = async (paymentId: string) => {
     setIsBkashModalOpen(false);
     if (!activeGatewayOrder) return;
+    let verdict = 'pending';
+    let detail = '';
     try {
-      await fetch('/api/payments/bkash/execute', {
+      const res = await fetch('/api/payments/bkash/execute', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paymentID: `BK_${Date.now()}`,
+          paymentID: paymentId,
           orderNumber: activeGatewayOrder.orderNumber,
           amount: activeGatewayOrder.total || grandTotal
         })
       });
-      showToast('bKash Payment authorized and captured!');
-    } catch (e) {
-      console.error(e);
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.verified) verdict = data.demoMode ? 'demo' : 'paid';
+      else {
+        verdict = 'pending';
+        detail = data?.errorBn || data?.error || '';
+      }
+    } catch {
+      verdict = 'pending';
+      detail = 'We could not confirm the payment with bKash yet.';
     }
-    navigate(`/order-confirmation/${activeGatewayOrder.id}`);
+
+    if (verdict === 'paid') showToast('bKash payment confirmed. Thank you!');
+    else if (verdict === 'demo') showToast('Demo payment recorded — no real money moved.', 'info');
+    else showToast(detail || 'Order placed. We will confirm your payment shortly.', 'info');
+
+    navigate(`/order-confirmation/${activeGatewayOrder.id}?payment=${verdict}`);
+  };
+
+  /** Send-Money TrxID capture: recorded for staff verification, not "paid". */
+  const handleBkashManual = (reference: string) => {
+    setIsBkashModalOpen(false);
+    if (!activeGatewayOrder) return;
+    void fetch('/api/payments/manual-claim', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        orderNumber: activeGatewayOrder.orderNumber,
+        method: 'BKASH',
+        reference,
+        amount: activeGatewayOrder.total || grandTotal,
+      }),
+    }).catch(() => undefined);
+    showToast('Transaction ID submitted. Our team will verify it and confirm your order.', 'info');
+    navigate(`/order-confirmation/${activeGatewayOrder.id}?payment=pending`);
   };
 
   return (
@@ -527,17 +643,23 @@ export function Checkout() {
               </label>
 
               <label
-                onClick={() => setPaymentMethod('SSLCOMMERZ')}
-                className={`flex items-start p-5 rounded-2xl border cursor-pointer transition-all ${
-                  paymentMethod === 'SSLCOMMERZ' 
-                    ? 'border-teal-900 dark:border-teal-500 bg-teal-50/50 dark:bg-teal-500/10 shadow-xs scale-101' 
-                    : 'border-stone-200 hover:bg-stone-50 dark:border-slate-700 dark:hover:bg-slate-800'
+                onClick={() => {
+                  if (sslGatewayReady) setPaymentMethod('SSLCOMMERZ');
+                }}
+                aria-disabled={!sslGatewayReady}
+                className={`flex items-start p-5 rounded-2xl border transition-all ${
+                  !sslGatewayReady
+                    ? 'border-stone-200 dark:border-slate-800 opacity-60 cursor-not-allowed'
+                    : paymentMethod === 'SSLCOMMERZ' 
+                      ? 'cursor-pointer border-teal-900 dark:border-teal-500 bg-teal-50/50 dark:bg-teal-500/10 shadow-xs scale-101' 
+                      : 'cursor-pointer border-stone-200 hover:bg-stone-50 dark:border-slate-700 dark:hover:bg-slate-800'
                 }`}
               >
                 <input
                   type="radio"
                   name="paymentMethod"
                   checked={paymentMethod === 'SSLCOMMERZ'}
+                  disabled={!sslGatewayReady}
                   onChange={() => setPaymentMethod('SSLCOMMERZ')}
                   className="mt-1 text-teal-900 focus:ring-teal-900 w-4 h-4"
                 />
@@ -547,12 +669,26 @@ export function Checkout() {
                       <CreditCard className="w-4 h-4 text-teal-800" />
                       Online Payment (bKash / Nagad / Debit / Credit Cards)
                     </span>
-                    <span className="text-[10px] font-bold text-stone-700 bg-stone-100 dark:bg-slate-700 px-2.5 py-0.5 rounded-full">
-                      Instant Gateway
+                    <span
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                        sslGatewayReady
+                          ? 'text-stone-700 bg-stone-100 dark:bg-slate-700'
+                          : 'text-amber-900 bg-amber-100 dark:bg-amber-500/20 border border-amber-300/70 dark:border-amber-500/30'
+                      }`}
+                    >
+                      {sslGatewayReady
+                        ? bkashGatewayReady
+                          ? 'Instant Gateway'
+                          : 'Cards only'
+                        : 'Setup pending'}
                     </span>
                   </div>
                   <p className="text-xs text-stone-500 mt-1 leading-relaxed">
-                    Secure 128-bit encrypted instant checkout via SSLCOMMERZ gateway.
+                    {sslGatewayReady
+                      ? 'Secure 128-bit encrypted instant checkout via SSLCOMMERZ gateway.'
+                      : language === 'BN'
+                        ? 'গেটওয়ে সংযোগের কাজ চলছে। এই মুহূর্তে অনলাইন পেমেন্ট চালু নেই—ক্যাশ অন ডেলিভারি বেছে নিন।'
+                        : 'The store is still finishing its gateway setup, so online payment is unavailable. Choose Cash on Delivery.'}
                   </p>
                 </div>
               </label>
@@ -661,6 +797,7 @@ export function Checkout() {
           orderNumber={activeGatewayOrder.orderNumber}
           amount={activeGatewayOrder.total || grandTotal}
           customerName={activeGatewayOrder.customer.name}
+          orderId={activeGatewayOrder?.id}
           onSuccess={handleSslSuccess}
           onFailure={(reason) => {
             setIsSslModalOpen(false);
@@ -681,7 +818,9 @@ export function Checkout() {
           orderNumber={activeGatewayOrder.orderNumber}
           amount={activeGatewayOrder.total || grandTotal}
           customerPhone={activeGatewayOrder.customer.phone}
+          orderId={activeGatewayOrder?.id}
           onSuccess={handleBkashSuccess}
+          onPendingManual={handleBkashManual}
           onFailure={(reason) => {
             setIsBkashModalOpen(false);
             showToast(`bKash Error: ${reason}`, 'info');

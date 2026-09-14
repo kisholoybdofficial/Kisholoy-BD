@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Trash2, ArrowRight, ShoppingBag, Truck, ShieldCheck, Tag, Sparkles, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useSeo } from '../lib/seo';
 
 export function CartPage() {
   const { cart, removeFromCart, updateCartQuantity, cartSubtotal, siteContent, language } = useApp();
@@ -12,6 +13,19 @@ export function CartPage() {
   const navigate = useNavigate();
 
   const isBn = language === 'BN';
+
+  /** A bag is per-session and per-customer: never indexable, never canonical. */
+  useSeo(
+    {
+      title: 'Your shopping bag | Kisholoy',
+      titleBn: 'আপনার ব্যাগ | কিশলয়',
+      description: 'Review the items in your Kisholoy bag before checkout.',
+      path: '/cart',
+      private: true,
+      locale: isBn ? 'bn' : 'en',
+    },
+    [language, cart.length]
+  );
 
   const shippingFee = cartSubtotal >= siteContent.shippingFees.freeShippingThreshold 
     ? 0 

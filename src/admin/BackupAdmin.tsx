@@ -155,7 +155,7 @@ export function BackupAdmin({ initialTab }: BackupAdminProps = {}) {
   const [syncingDrive, setSyncingDrive] = useState(false);
   const [connectingDrive, setConnectingDrive] = useState(false);
   const [restoringFromDrive, setRestoringFromDrive] = useState<string | null>(null);
-  const [connectEmailInput, setConnectEmailInput] = useState('kisholoybd.official@gmail.com');
+  const [connectEmailInput, setConnectEmailInput] = useState('');
   const [connectFolderInput, setConnectFolderInput] = useState('KISHOLOY-Backups');
 
   // Initial Data Fetch
@@ -1220,7 +1220,7 @@ export function BackupAdmin({ initialTab }: BackupAdminProps = {}) {
                     value={connectEmailInput}
                     onChange={(e) => setConnectEmailInput(e.target.value)}
                     disabled={driveConfig?.connected}
-                    placeholder="e.g. kisholoybd.official@gmail.com"
+                    placeholder={isBn ? "ডিপ্লয়মেন্টে নির্ধারণ করা ইমেইল" : "leave blank to use the configured inbox"}
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-xs focus:ring-1 focus:ring-teal-900 bg-stone-50/50 disabled:bg-stone-100 disabled:text-stone-600"
                   />
                 </div>
@@ -1497,7 +1497,7 @@ export function BackupAdmin({ initialTab }: BackupAdminProps = {}) {
               <div>
                 <span className="text-stone-400 block">Total Restores Audited:</span>
                 <span className="text-xl font-bold font-mono text-white">
-                  {drMetrics?.totalRestoresExecuted || 2} Operations
+                  {drMetrics?.totalRestoresExecuted ?? 0} Operations
                 </span>
                 <span className="text-[10px] text-stone-400 block mt-0.5">100% Rollback Safety</span>
               </div>

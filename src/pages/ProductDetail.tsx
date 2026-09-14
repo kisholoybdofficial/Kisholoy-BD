@@ -3,6 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Star, ShieldCheck, Truck, RotateCcw, Check, ShoppingBag, ArrowLeft, Heart, Sparkles, MapPin, Layers, Award } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ProductCard } from '../components/ProductCard';
+import { useSeo, productStructuredData, breadcrumbStructuredData } from '../lib/seo';
+import { ProductImage } from '../components/ProductImage';
 
 export function ProductDetail() {
   const { slug } = useParams<{ slug: string }>();
@@ -15,6 +17,76 @@ export function ProductDetail() {
     product?.variants?.[0]?.id
   );
   const [quantity, setQuantity] = useState<number>(1);
+
+  const isBn = language === 'BN';
+  const seoPath = `/product/${slug ?? ''}`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const displayTitle = product
+    ? product.seo?.title || (product.titleBn && isBn ? product.titleBn : product.title)
+    : 'Product not found';
+  const displayDescription = product
+    ? product.seo?.description || product.shortDescription || product.description
+    : 'This product is no longer listed in the Kisholoy catalogue.';
+
+  // Hooks must run before the not-found branch, so everything here is optional.
+  useSeo(
+    {
+      title: `${displayTitle} | Kisholoy`,
+      titleBn: product
+        ? `${product.seo?.titleBn || product.titleBn || product.title} | কিশলয়`
+        : 'পণ্য পাওয়া যায়নি | কিশলয়',
+      description: displayDescription,
+      descriptionBn: product
+        ? product.seo?.descriptionBn || product.shortDescriptionBn || product.descriptionBn
+        : undefined,
+      path: seoPath,
+      image: product?.seo?.ogImage || product?.images?.[0] || product?.thumbnail,
+      imageAlt: product ? displayTitle : undefined,
+      type: 'product',
+      /**
+       * Missing, archived, drafted or explicitly noindexed products must never
+       * linger in a search index even though the URL still resolves.
+       */
+      private:
+        !product ||
+        product.isDeleted === true ||
+        (product.status !== undefined && product.status !== 'ACTIVE') ||
+        product.seo?.noindex === true,
+      locale: isBn ? 'bn' : 'en',
+      structuredData: product
+        ? [
+            productStructuredData({
+              name: product.title,
+              alternateName: product.titleBn || undefined,
+              description: displayDescription,
+              image: product.images,
+              sku: product.sku,
+              brand: product.brand || product.vendorName || 'Kisholoy',
+              price: product.variants?.length
+                ? Math.min(...product.variants.map((v) => v.price))
+                : product.price,
+              compareAtPrice: product.originalPrice,
+              availability:
+                product.stockStatus === 'OUT_OF_STOCK' || product.stock <= 0
+                  ? 'OutOfStock'
+                  : product.stockStatus === 'PRE_ORDER' || product.stockStatus === 'BACKORDER'
+                    ? 'PreOrder'
+                    : 'InStock',
+              ratingValue: product.rating,
+              reviewCount: product.reviewsCount,
+              url: `${origin}${seoPath}`,
+            }),
+            breadcrumbStructuredData([
+              { name: 'Home', url: '/' },
+              { name: 'Shop', url: '/shop' },
+              { name: product.category, url: `/category/${product.categorySlug}` },
+              { name: product.title },
+            ]),
+          ]
+        : undefined,
+    },
+    [slug, product?.id, selectedVariantId, language]
+  );
 
   if (!product) {
     return (
@@ -70,10 +142,12 @@ export function ProductDetail() {
         {/* Left Column: Image Gallery (5 cols on large screens) */}
         <div className="lg:col-span-6 space-y-4">
           <div className="aspect-square w-full rounded-3xl overflow-hidden bg-stone-100 dark:bg-slate-800/70 border border-stone-200/90 dark:border-slate-700 shadow-sm relative group">
-            <img
+            <ProductImage
               src={product.images[selectedImage] || product.images[0]}
               alt={title}
-              className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              fill
+              priority
+              imgClassName="object-cover object-center group-hover:scale-105 transition-transform duration-500"
             />
             {product.badge && (
               <span className="absolute top-5 left-5 px-3.5 py-1 bg-stone-950/90 backdrop-blur-md text-amber-300 text-xs font-bold rounded-xl shadow-xs border border-stone-800">
@@ -89,11 +163,11 @@ export function ProductDetail() {
                 <button
                   key={idx}
                   onClick={() => setSelectedImage(idx)}
-                  className={`w-20 h-20 rounded-2xl overflow-hidden border-2 flex-shrink-0 transition-all ${
+                  className={`relative w-20 h-20 rounded-2xl overflow-hidden border-2 flex-shrink-0 transition-all ${
                     selectedImage === idx ? 'border-teal-900 shadow-xs scale-102' : 'border-stone-200 opacity-70 hover:opacity-100 dark:border-slate-700'
                   }`}
                 >
-                  <img src={img} alt={`Thumb ${idx}`} className="w-full h-full object-cover" />
+                  <ProductImage src={img} alt={`${title} — image ${idx + 1}`} fill />
                 </button>
               ))}
             </div>

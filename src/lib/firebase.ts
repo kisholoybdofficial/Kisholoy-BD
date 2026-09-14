@@ -113,7 +113,11 @@ export async function signInWithGoogle() {
           email: user.email || '',
           displayName: user.displayName || 'Kisholoy User',
           photoURL: user.photoURL || '',
-          role: user.email === 'kisholoybd.official@gmail.com' ? 'SUPER_ADMIN' : 'CUSTOMER',
+          // `role` is deliberately NOT written from the client: a profile field a
+          // browser can set is not a privilege. Server-side RBAC (see
+          // server/routePermissions.ts) is the only source of authority, and this
+          // document is used for display and personalisation only.
+          role: 'CUSTOMER',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         });

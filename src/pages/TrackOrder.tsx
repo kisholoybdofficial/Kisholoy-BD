@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { Search, CheckCircle2, Clock, Truck, Package, ShieldCheck, MapPin, AlertCircle } from 'lucide-react';
+import { Search, CheckCircle2, Clock, Truck, Package, ShieldCheck, MapPin, AlertCircle, Phone, Lock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useSeo } from '../lib/seo';
 import { OrderStatus } from '../types';
 
 export function TrackOrder() {
@@ -9,29 +10,72 @@ export function TrackOrder() {
   const { orders, language } = useApp();
   const [query, setQuery] = useState(searchParams.get('order') || '');
   const [searchedOrder, setSearchedOrder] = useState<any>(null);
+  const [trackPhone, setTrackPhone] = useState('');
+  const [trackError, setTrackError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
+
+  useSeo(
+    {
+      title: 'Track your order | Kisholoy',
+      titleBn: 'আপনার অর্ডার ট্র্যাক করুন | কিশলয়',
+      description:
+        'Enter a Kisholoy order number or the mobile number used at checkout to see live dispatch, courier and delivery status.',
+      descriptionBn:
+        'অর্ডার নাম্বার বা চেকআউটে দেওয়া মোবাইল নাম্বার দিয়ে কিশলয় অর্ডারের লাইভ ডিসপ্যাচ ও ডেলিভারি স্ট্যাটাস দেখুন।',
+      path: '/track-order',
+      locale: language === 'BN' ? 'bn' : 'en',
+    },
+    [language]
+  );
 
   useEffect(() => {
     const initialOrder = searchParams.get('order');
+    const initialPhone = searchParams.get('phone');
     if (initialOrder) {
       setQuery(initialOrder);
-      performSearch(initialOrder);
+      if (initialPhone) setTrackPhone(initialPhone);
+      performSearch(initialOrder, initialPhone || '');
     }
   }, [searchParams, orders]);
 
-  const performSearch = async (searchTerm: string) => {
+  const performSearch = async (searchTerm: string, phoneArg?: string) => {
     setHasSearched(true);
     const cleanTerm = searchTerm.trim();
+    const cleanPhone = (phoneArg ?? '').trim();
+
+    // An order number alone is not proof of ownership — the API also wants the
+    // mobile number used at checkout, so the form collects it.
+    if (cleanTerm && !cleanPhone && !/^01[0-9]{9}$/.test(cleanTerm.replace(/[^0-9]/g, ''))) {
+      setTrackError(
+        language === 'BN'
+          ? 'নিরাপত্তার জন্য অর্ডার নাম্বারের সাথে চেকআউটে দেওয়া মোবাইল নাম্বারটিও দিন।'
+          : 'For your privacy, enter the order number together with the mobile number used at checkout.'
+      );
+      return;
+    }
 
     // 1. Try server tracking API
     try {
-      const res = await fetch(`/api/orders/track?orderNumber=${encodeURIComponent(cleanTerm)}&phone=${encodeURIComponent(cleanTerm)}`);
+      const res = await fetch(
+        `/api/orders/track?orderNumber=${encodeURIComponent(cleanTerm)}&phone=${encodeURIComponent(cleanPhone || cleanTerm)}`
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.order) {
           setSearchedOrder(data.order);
+          setTrackError('');
           return;
         }
+      }
+      if (res.status === 404 || res.status === 400) {
+        const data = await res.json().catch(() => null);
+        setTrackError(
+          (language === 'BN' ? data?.errorBn : data?.error) ||
+            data?.error ||
+            (language === 'BN'
+              ? 'এই তথ্য দিয়ে কোনো অর্ডার পাওয়া যায়নি।'
+              : 'No order matched that order number and mobile number.')
+        );
       }
     } catch {
       // ignore network errors and fallback to local state
@@ -51,7 +95,7 @@ export function TrackOrder() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim()) {
-      performSearch(query);
+      performSearch(query, trackPhone);
     }
   };
 
@@ -91,22 +135,44 @@ export function TrackOrder() {
         <h1 className="text-3xl font-serif font-bold text-stone-900 dark:text-slate-100 mb-3">
           {language === 'BN' ? 'আপনার অর্ডার ট্র্যাক করুন' : 'Track Your Package'}
         </h1>
-        <p className="text-stone-500 text-xs sm:text-sm">
-          Enter your <strong>Order Number (e.g. KSH-2026-0891)</strong> or registered <strong>Mobile Number</strong>.
+        <p className="text-stone-500 text-xs sm:text-sm font-bangla">
+          {language === 'BN' ? (
+            <>অর্ডার নাম্বার (যেমন KSH-2026-0891) এবং চেকআউটে দেওয়া <strong>মোবাইল নাম্বার</strong> দুটোই দিন—এতে করে অন্য কারো অর্ডার দেখা সম্ভব থাকে না।</>
+          ) : (
+            <>Enter your <strong>Order Number</strong> together with the <strong>mobile number used at checkout</strong>. Both are required so nobody else can read your address.</>
+          )}
+        </p>
+        <p className="text-[11px] text-stone-400 mt-2 inline-flex items-center gap-1.5">
+          <Lock className="w-3 h-3" />
+          {language === 'BN' ? 'তথ্য কেবল আপনার নাম্বার মিললেই দেখানো হয়।' : 'Order details are only revealed to the matching mobile number.'}
         </p>
       </div>
 
       {/* Search Input Box */}
-      <form onSubmit={handleSearch} className="max-w-xl mx-auto mb-12 flex gap-2">
+      <form onSubmit={handleSearch} className="max-w-xl mx-auto mb-6 flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-3.5" />
           <input
             type="text"
             required
-            placeholder="e.g. KSH-2026-0891 or 01712345678"
+            placeholder={language === 'BN' ? 'যেমন KSH-2026-0891' : 'e.g. KSH-2026-0891'}
+            aria-label={language === 'BN' ? 'অর্ডার নাম্বার' : 'Order number'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="w-full text-xs sm:text-sm pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border border-stone-300 dark:border-slate-600 rounded-xl focus:outline-none focus:border-teal-800 shadow-xs"
+          />
+        </div>
+        <div className="relative flex-1">
+          <Phone className="w-4 h-4 text-stone-400 absolute left-3.5 top-3.5" />
+          <input
+            type="tel"
+            required
+            inputMode="numeric"
+            placeholder={language === 'BN' ? 'চেকআউটের মোবাইল নাম্বার' : 'Mobile used at checkout'}
+            aria-label={language === 'BN' ? 'মোবাইল নাম্বার' : 'Mobile number'}
+            value={trackPhone}
+            onChange={(e) => setTrackPhone(e.target.value)}
+            className="w-full text-xs sm:text-sm pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border border-stone-300 dark:border-slate-600 rounded-xl focus:outline-none focus:border-teal-800 shadow-xs font-bangla"
           />
         </div>
         <button
