@@ -60,6 +60,7 @@ never masquerade as configuration.
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Shared rate limiting. Without Redis every isolate counts separately, so the effective limit multiplies with concurrency. |
 | `SECURITY_HMAC_SECRET` | Domain separation for audit/IPN signatures; lets you rotate the session secret without invalidating shared secrets and vice versa. |
 | `KISHOLOY_CSP` | Set only if you need a documented relaxation. The default answers `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and `frame-ancestors 'self'` (the `localhost:*` extra appears only outside production, so the Arena/IDE preview can frame the app). |
+| `KISHOLOY_FRAME_ANCESTORS` | The only supported CSP knob for embedding: append an origin (e.g. a partner checkout frame) instead of loosening the whole policy. |
 | `RESEND_API_KEY` + `EMAIL_FROM` | Password reset and receipt mail. Off → resets return a support instruction instead of silently dropping the mail. |
 
 ### 1.3 Payments & logistics (leave unset and the features stay honestly off)
@@ -87,7 +88,18 @@ There is no scheduler inside the process. To make "backups run daily" true, wire
 Vercel Cron (or any external timer) to `POST /api/backups/snapshots` with a
 service credential, and keep the file off-host.
 
-### 1.5 Production must be off (and is checked by the audit script)
+### 1.5 Names that do nothing in this build
+
+`.env.example` keeps a clearly separated block for variables no code reads —
+`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_ANON_KEY`,
+`FIRESTORE_DATABASE_ID`, `GEMINI_API_KEY`, `SMS_GATEWAY_API_KEY`, `REDIS_URL`.
+They survive only because the deployment diagnostics card mentions Supabase, and
+setting them will not enable a mirror, a model or an SMS rail. Either implement
+the integration or delete the advice; do not "configure" your way through an
+outage on these. (`KISHOLOY_MONGO_URI` is a genuine alias for `MONGODB_URI`, and
+`GOOGLE_APPLICATION_CREDENTIALS` is read by the Drive path.)
+
+### 1.6 Production must be off (and is checked by the audit script)
 
 | Variable | Production value |
 | --- | --- |
