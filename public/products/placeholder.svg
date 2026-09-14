@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800" role="img" aria-label="Product image coming soon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b403a"/>
+      <stop offset="100%" stop-color="#083732"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7f3ea" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#f7f3ea" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="800" fill="url(#bg)"/>
+  <rect width="800" height="800" fill="url(#sheen)"/>
+  <g fill="none" stroke="#f7f3ea" stroke-opacity="0.55" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M250 500h300l-38 90H288z"/>
+    <path d="M262 500l34-150h208l34 150"/>
+    <circle cx="330" cy="300" r="34"/>
+    <path d="M400 350v-70l60-40"/>
+  </g>
+  <text x="400" y="662" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="34" font-weight="600" letter-spacing="6" fill="#f7f3ea" fill-opacity="0.9">KISHOLOY</text>
+  <text x="400" y="700" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="20" letter-spacing="2" fill="#f7f3ea" fill-opacity="0.6">ছবি যোগ করা হবে</text>
+</svg>
